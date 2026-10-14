@@ -1,0 +1,770 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rat ConTRAPtion</title>
+<style>
+@font-face{font-family:'Rubik';font-style:normal;font-weight:300 900;font-display:swap;src:url('fonts/Rubik-VariableFont_wght.ttf') format('truetype')}
+:root{
+  --table:#C8D5E1; --table-deep:#B3C4D4; --ink:#14202C; --muted:#4B5D6F;
+  --panel:#F2F5F8; --line:rgba(20,32,44,.14);
+  --red:#D8262E; --blue:#2452B8; --yellow:#F2C21B; --wood:#E0BC7C; --wood-dark:#8A5E2E;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --table:#1F3348; --table-deep:#172739; --ink:#F1ECE2; --muted:#A5B4C4;
+    --panel:#142233; --line:rgba(255,255,255,.13);
+  }
+}
+:root[data-theme="dark"]{
+  --table:#1F3348; --table-deep:#172739; --ink:#F1ECE2; --muted:#A5B4C4;
+  --panel:#142233; --line:rgba(255,255,255,.13);
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0}
+body{
+  background:radial-gradient(120% 80% at 50% 45%, var(--table) 0%, var(--table-deep) 100%);
+  background-color:var(--table);
+  color:var(--ink); font-family:"Rubik",system-ui,-apple-system,"Segoe UI",sans-serif;
+  -webkit-tap-highlight-color:transparent; overflow:hidden;
+}
+#app{height:100%;display:flex;flex-direction:column;max-width:560px;margin:0 auto}
+.hud{display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:8px;padding:10px 16px 4px}
+.seat{display:flex;flex-direction:column;gap:2px;padding:6px 10px;border-radius:12px;border:2px solid transparent;transition:background-color .2s,border-color .2s;min-width:0}
+.seat.ai{text-align:right;align-items:flex-end}
+.seat.on{background:var(--yellow);border-color:#B0860A;color:#14202C;box-shadow:0 3px 0 #B0860A}
+.seat .who{font-size:.85rem;font-weight:500;color:var(--muted);white-space:nowrap}
+.seat.on .who{color:#14202C;font-weight:700}
+.seat.you.on .who::after{content:" ◂ turn";font-weight:900}
+.seat.ai.on .who::before{content:"turn ▸ ";font-weight:900}
+.seat .pts{font-size:2rem;font-weight:900;line-height:1;font-variant-numeric:tabular-nums}
+.menu{align-self:center;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:999px;padding:8px 14px;font-weight:500;font-size:.9rem}
+.row{display:flex;gap:10px;margin-top:16px}
+.row .go,.row .ghost{flex:1;white-space:nowrap;padding:14px 8px}
+.ghost{flex:1;border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:999px;padding:14px;font-weight:700;font-size:1rem}
+.brand{font-weight:900;font-size:1rem;letter-spacing:.01em;padding:4px 9px 5px;background:#111;color:#fff;border-radius:3px;align-self:center;
+  box-shadow:inset 0 -3px 0 #3E7CE0}
+#stage{flex:1;min-height:0;position:relative}
+#stage canvas{display:block;touch-action:none}
+.foot{display:grid;grid-template-columns:96px minmax(0,1fr) 96px;align-items:center;column-gap:8px;padding:6px 16px 10px}
+#bank{justify-self:end;width:96px;padding:12px 6px!important;font-size:.95rem!important}
+#mute{justify-self:start}
+#status{margin:0;font-size:.8rem;line-height:1.25;min-height:3.75em;display:flex;align-items:center;justify-content:center;text-align:center}
+button{font:inherit;cursor:pointer}
+button:focus-visible{outline:3px solid var(--yellow);outline-offset:2px}
+#bank{border:0;border-radius:999px;padding:12px 18px;font-weight:700;font-size:1rem;background:var(--red);color:#fff;
+  box-shadow:0 3px 0 #8A1116;white-space:nowrap;transition:transform .08s, opacity .2s}
+#bank:active{transform:translateY(2px);box-shadow:0 1px 0 #8A1116}
+#bank:disabled{opacity:.35;cursor:default;transform:none}
+#mute{border:1px solid var(--line);background:transparent;color:var(--ink);border-radius:999px;width:42px;height:42px;font-size:1.1rem}
+.sheet{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(10,18,28,.55);z-index:5}
+.sheet[hidden]{display:none}
+.card{background:var(--panel);color:var(--ink);max-width:380px;width:100%;border-radius:14px;padding:22px 22px 20px;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+.card h1{margin:0 0 4px;font-weight:900;font-size:2rem;line-height:1.05}
+.card h2{margin:0 0 6px;font-weight:900;font-size:1.6rem}
+.card p{margin:.5em 0;line-height:1.45;font-size:.95rem;color:var(--ink)}
+.card .sub{color:var(--muted);margin-top:0}
+.legend{display:flex;gap:14px;margin:12px 0 4px;font-size:.9rem;font-weight:500}
+.legend span{display:flex;align-items:center;gap:6px}
+.dot{display:inline-block;border-radius:50%;box-shadow:inset 0 0 0 2px rgba(0,0,0,.25)}
+.seg{display:flex;border:1px solid var(--line);border-radius:999px;padding:3px;margin:12px 0 0}
+.seg[hidden]{display:none}
+.seg+.go,.seg+.seg[hidden]+.go{margin-top:16px}
+#skill{margin-bottom:16px}
+.seg button{flex:1;border:0;background:transparent;color:var(--ink);padding:9px 0;border-radius:999px;font-weight:500}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--panel);font-weight:700}
+.go{width:100%;border:0;border-radius:999px;padding:14px;font-weight:900;font-size:1.05rem;background:var(--red);color:#fff;box-shadow:0 3px 0 #8A1116}
+.go:active{transform:translateY(2px);box-shadow:0 1px 0 #8A1116}
+.menu-card{text-align:center}
+.logo{display:block;width:min(220px,70%);height:auto;margin:0 auto 10px;filter:drop-shadow(0 6px 10px rgba(0,0,0,.25))}
+.wordmark .caps{color:var(--red)}
+.wordmark{padding-top:.28em}
+.wordmark .c{position:relative;display:inline-block}
+.wordmark .rat{position:absolute;left:-.2em;top:-.34em;font-size:.4em;font-weight:900;color:var(--red);transform:rotate(-20deg);transform-origin:left bottom;letter-spacing:.01em;line-height:1}
+.wordmark{font-size:clamp(1.6rem,7.4vw,2.3rem)!important;letter-spacing:-.01em;white-space:nowrap}
+.menu-card .seg{text-align:left}
+.link{display:block;margin:14px auto 0;border:0;background:none;color:var(--muted);font-weight:500;font-size:.95rem;text-decoration:underline;text-underline-offset:3px;padding:6px}
+.credit{margin-top:14px!important;padding-top:12px;border-top:1px solid var(--line);color:var(--muted)!important;font-size:.9rem!important}
+#about .go{margin-top:16px}
+.noscript{padding:20px}
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="hud">
+    <div class="seat you" id="seat-you"><span class="who">You</span><span class="pts" id="you-pts">0</span></div>
+    <button class="menu" id="menu" aria-label="Quit to main menu">‹ Menu</button>
+    <div class="seat ai" id="seat-ai"><span class="who">Computer</span><span class="pts" id="ai-pts">0</span></div>
+  </header>
+  <main id="stage" aria-label="Rat trap board"></main>
+  <footer class="foot">
+    <button id="mute" aria-label="Mute sound" title="Sound">♪</button>
+    <p id="status" aria-live="polite">Loading…</p>
+    <button id="bank" disabled>Bank</button>
+  </footer>
+</div>
+
+<div class="sheet" id="intro">
+  <div class="card menu-card" role="dialog" aria-labelledby="intro-title">
+    <svg class="logo" viewBox="0 0 240 132" role="img" aria-label="Rat ConTRAPtion logo: a spring bar pressing on red, blue and yellow pegs">
+      <defs>
+        <radialGradient id="lgY" cx="40%" cy="38%" r="65%"><stop offset="0" stop-color="#FFE48A"/><stop offset=".55" stop-color="#F2C21B"/><stop offset="1" stop-color="#B0860A"/></radialGradient>
+        <radialGradient id="lgB" cx="40%" cy="38%" r="65%"><stop offset="0" stop-color="#6E94E4"/><stop offset=".55" stop-color="#2452B8"/><stop offset="1" stop-color="#14306E"/></radialGradient>
+        <radialGradient id="lgR" cx="40%" cy="38%" r="65%"><stop offset="0" stop-color="#F47C80"/><stop offset=".55" stop-color="#D8262E"/><stop offset="1" stop-color="#8A1116"/></radialGradient>
+      </defs>
+      <rect x="6" y="6" width="228" height="120" rx="10" fill="#D7AE6C"/>
+      <rect x="18" y="16" width="204" height="100" rx="3" fill="#EFD8A8"/>
+      <line x1="120" y1="2" x2="120" y2="52" stroke="#C99A5B" stroke-width="7" stroke-linecap="round"/>
+      <polyline points="120,16 132,20 108,26 132,32 108,38 132,44 120,48" fill="none" stroke="#7C8791" stroke-width="3" stroke-linejoin="round"/>
+      <rect x="18" y="48" width="204" height="12" fill="#E0BC7C" stroke="#8A5E2E" stroke-width="1.5"/>
+      <g stroke-width="2">
+        <circle cx="52" cy="80" r="17" fill="url(#lgR)" stroke="#8A1116"/><circle cx="52" cy="80" r="7" fill="#D8262E" stroke="#8A1116" stroke-opacity=".5"/>
+        <circle cx="90" cy="92" r="15" fill="url(#lgB)" stroke="#14306E"/><circle cx="90" cy="92" r="6" fill="#2452B8" stroke="#14306E" stroke-opacity=".5"/>
+        <circle cx="124" cy="78" r="13" fill="url(#lgY)" stroke="#B0860A"/><circle cx="124" cy="78" r="5.5" fill="#F2C21B" stroke="#B0860A" stroke-opacity=".5"/>
+        <circle cx="158" cy="94" r="17" fill="url(#lgR)" stroke="#8A1116"/><circle cx="158" cy="94" r="7" fill="#D8262E" stroke="#8A1116" stroke-opacity=".5"/>
+        <circle cx="194" cy="78" r="15" fill="url(#lgB)" stroke="#14306E"/><circle cx="194" cy="78" r="6" fill="#2452B8" stroke="#14306E" stroke-opacity=".5"/>
+      </g>
+    </svg>
+    <h1 id="intro-title" class="wordmark" aria-label="Rat ConTRAPtion"><span aria-hidden="true"><span class="c"><span class="rat">Rat</span>C</span>on<span class="caps">TRAP</span>tion</span></h1>
+    <p class="sub">The rat trap, for one or two players.</p>
+    <div class="seg" id="mode" role="group" aria-label="Players">
+      <button data-p="1" aria-pressed="true">1 player</button>
+      <button data-p="2" aria-pressed="false">2 players</button>
+    </div>
+    <div class="seg" id="skill" role="group" aria-label="Computer skill">
+      <button data-d="easy" aria-pressed="false">Easy</button>
+      <button data-d="normal" aria-pressed="true">Normal</button>
+      <button data-d="hard" aria-pressed="false">Hard</button>
+    </div>
+    <button class="go" id="start">Set the trap</button>
+    <button class="link" id="about-open">How to play &amp; about</button>
+  </div>
+</div>
+
+<div class="sheet" id="about" hidden>
+  <div class="card" role="dialog" aria-labelledby="about-title">
+    <h2 id="about-title">How to play</h2>
+    <p>A spring bar presses down on the pegs the whole time. Take turns pulling pegs out. Pull as many as you dare, then bank them.</p>
+    <p>Each pull lets the pack shift a little. If the bar jumps about 2 mm or more in one go, the trap snaps and you lose everything you pulled that turn. Pegs lined up under the bar carry the most force.</p>
+    <div class="legend">
+      <span><i class="dot" style="width:16px;height:16px;background:var(--yellow)"></i>1 point</span>
+      <span><i class="dot" style="width:19px;height:19px;background:var(--blue)"></i>2 points</span>
+      <span><i class="dot" style="width:22px;height:22px;background:var(--red)"></i>3 points</span>
+    </div>
+    <p>The game ends when the trap shuts past the arrows or the last peg is out.</p>
+    <p class="credit">Rat ConTRAPtion is made by Jonas and Claude.</p>
+    <button class="go" id="about-close">Back to menu</button>
+  </div>
+</div>
+
+<div class="sheet" id="confirm" hidden>
+  <div class="card" role="alertdialog" aria-labelledby="confirm-title">
+    <h2 id="confirm-title">Quit this game?</h2>
+    <p class="sub">The scores so far will be lost.</p>
+    <div class="row">
+      <button class="ghost" id="keep">Keep playing</button>
+      <button class="go" id="quit">Quit to menu</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet" id="end" hidden>
+  <div class="card" role="dialog" aria-labelledby="end-title">
+    <h2 id="end-title">Game over</h2>
+    <p id="end-reason" class="sub"></p>
+    <p id="end-score"></p>
+    <button class="go" id="again">Set the trap again</button>
+  </div>
+</div>
+
+<script src="phaser.min.js"></script>
+<script>
+function makeCore(M){
+  const C={W:420,H:700,L:40,R:380,TOP:40,BOT:660,BAR_H:18,BAR_START:50,
+    force:0.06, barDensity:0.01, muK:0.03, muS:0.05, pegFric:0.22, wallFric:0.1, subs:2};
+  C.SHUT_Y=C.BOT-58;
+  C.TYPES=[{key:"y",r:20,v:1,n:30},{key:"b",r:23,v:2,n:20},{key:"r",r:26.5,v:3,n:20}];
+  C.POUR_H=1100; C.POUR_G=0.35; C.POUR_VMAX=9;
+  const X0=(C.L+C.R)/2;
+  function create(rand,opt){
+    Object.assign(C,opt||{});
+    rand=rand||Math.random;
+    const engine=M.Engine.create({gravity:{x:0,y:0,scale:0},positionIterations:16,velocityIterations:12});
+    const w=C.R-C.L, Bd=M.Bodies;
+    M.Composite.add(engine.world,[
+      Bd.rectangle(X0,C.BOT+29,w+120,60,{isStatic:true,friction:C.wallFric}),
+      Bd.rectangle(C.L-29,(C.BOT-C.POUR_H-200+C.BOT+60)/2,60,C.POUR_H+260+(C.BOT-C.TOP),{isStatic:true,friction:C.wallFric}),
+      Bd.rectangle(C.R+29,(C.BOT-C.POUR_H-200+C.BOT+60)/2,60,C.POUR_H+260+(C.BOT-C.TOP),{isStatic:true,friction:C.wallFric}),
+    ]);
+    const bar=Bd.rectangle(X0,C.BAR_START,w-2,C.BAR_H,{density:C.barDensity,inertia:Infinity,friction:0.2,frictionAir:0,label:'bar'});
+    // fixed set: 30 yellow, 20 blue, 20 red. Place the big ones first, loosely, below the raised bar.
+    // Pour the pegs in: shuffled, placed loosely in a tall column above the tray,
+    // then they fall in (see step) before the bar is released onto them.
+    const bag=[]; for(const t of C.TYPES) for(let i=0;i<t.n;i++) bag.push(t);
+    for(let i=bag.length-1;i>0;i--){ const j=Math.floor(rand()*(i+1)); [bag[i],bag[j]]=[bag[j],bag[i]]; }
+    const pegs=[], yTop=C.BOT-C.POUR_H;
+    for(const t of bag){
+      for(let tries=0;tries<6000;tries++){
+        const x=C.L+t.r+1+rand()*(w-2*t.r-2);
+        const y=yTop+rand()*(C.BOT-t.r-1-yTop);
+        if(pegs.some(p=>Math.hypot(p.body.position.x-x,p.body.position.y-y)<p.r+t.r+1)) continue;
+        const body=Bd.circle(x,y,t.r,{density:0.004,friction:C.pegFric,frictionStatic:1,restitution:0,frictionAir:0,slop:0.02});
+        pegs.push({id:pegs.length,body,r:t.r,v:t.v,key:t.key,alive:true,load:0,_l:0});
+        break;
+      }
+    }
+    M.Composite.add(engine.world,pegs.map(p=>p.body));
+    const g={engine,bar,pegs,t:0,phase:'pour',calm:0};
+    M.Events.on(engine,'collisionActive',e=>{ accumulate(g,e.pairs); });
+    M.Events.on(engine,'collisionStart',e=>{ accumulate(g,e.pairs); });
+    return g;
+  }
+  function accumulate(g,pairs){
+    for(const pr of pairs){ let imp=0; const cs=pr.activeContacts||pr.contacts||[]; for(const c of cs) if(c) imp+=Math.abs(c.normalImpulse||0);
+      const a=pr.bodyA._peg, b=pr.bodyB._peg; if(a) a._l+=imp; if(b) b._l+=imp; }
+  }
+  const alive=g=>g.pegs.filter(p=>p.alive);
+  const barBottom=g=>g.bar.position.y+C.BAR_H/2;
+  // one frame = C.subs substeps. Board friction is Coulomb: kinetic decel muK, static threshold muS (per 60Hz step units)
+  function pourStep(g){
+    const dt=1000/60/C.subs, k=1/C.subs;
+    for(const p of g.pegs) p.body._peg=p;
+    let vmax=0;
+    for(let s=0;s<C.subs;s++){
+      for(const p of g.pegs){ const b=p.body, v=M.Body.getVelocity(b); let vy=v.y+C.POUR_G*k, vx=v.x*0.97;
+        const sp=Math.hypot(vx,vy); if(sp>C.POUR_VMAX){ vx*=C.POUR_VMAX/sp; vy*=C.POUR_VMAX/sp; }
+        M.Body.setVelocity(b,{x:vx,y:vy}); M.Body.setAngularVelocity(b,M.Body.getAngularVelocity(b)*0.8); }
+      M.Engine.update(g.engine,dt);
+    }
+    for(const p of g.pegs){ const v=M.Body.getVelocity(p.body); vmax=Math.max(vmax,Math.hypot(v.x,v.y)); }
+    g.calm=vmax<0.6?g.calm+1:0;
+    if(g.calm>15){ // settled: stop the pour and release the bar from the top
+      for(const p of g.pegs) M.Body.setVelocity(p.body,{x:0,y:0});
+      const top=Math.min(...g.pegs.map(p=>p.body.position.y-p.r));
+      M.Body.setPosition(g.bar,{x:X0,y:Math.min(C.BAR_START,top-C.BAR_H/2-4)});
+      M.Composite.add(g.engine.world,g.bar); g.phase='press';
+    }
+  }
+  function step(g){
+    if(g.phase==='pour') return pourStep(g);
+    const dt=1000/60/C.subs, k=1/C.subs;
+    for(const p of g.pegs){ p.body._peg=p; p._l=0; }
+    for(let s=0;s<C.subs;s++){
+      M.Body.applyForce(g.bar,g.bar.position,{x:0,y:C.force});
+      M.Engine.update(g.engine,dt);
+      for(const p of g.pegs){ if(!p.alive) continue; const b=p.body,v=M.Body.getVelocity(b),sp=Math.hypot(v.x,v.y);
+        // velocity here is per base step (16.67ms); friction decrement scaled by substep
+        const muK=C.muK*k, muS=C.muS*k;
+        if(sp<=muS) M.Body.setVelocity(b,{x:0,y:0});
+        else M.Body.setVelocity(b,{x:v.x*(sp-muK)/sp,y:v.y*(sp-muK)/sp});
+        M.Body.setAngularVelocity(b,M.Body.getAngularVelocity(b)*0.85); }
+      M.Body.setPosition(g.bar,{x:X0,y:g.bar.position.y});
+      M.Body.setVelocity(g.bar,{x:0,y:M.Body.getVelocity(g.bar).y});
+      M.Body.setAngle(g.bar,0);
+    }
+    for(const p of g.pegs){ if(!p.alive) continue; p.load=p.load*0.85+p._l*0.15; }
+  }
+  function snapshot(g){ const bs=[g.bar,...g.pegs.map(p=>p.body)];
+    return bs.map(b=>({b,px:b.position.x,py:b.position.y,qx:b.positionPrev.x,qy:b.positionPrev.y,a:b.angle,ap:b.anglePrev,vx:b.velocity.x,vy:b.velocity.y})); }
+  function restore(snap){ for(const s of snap){ const b=s.b; M.Body.setPosition(b,{x:s.px,y:s.py}); M.Body.setAngle(b,s.a);
+      b.positionPrev.x=s.qx; b.positionPrev.y=s.qy; b.anglePrev=s.ap; b.velocity.x=s.vx; b.velocity.y=s.vy; b.positionImpulse.x=0; b.positionImpulse.y=0; } }
+  // what-if: how far does the bar move if peg p is pulled? (simulated, then rewound)
+  function probe(g,p,frames){ const snap=snapshot(g), loads=g.pegs.map(q=>q.load), y0=g.bar.position.y;
+    p.alive=false; M.Composite.remove(g.engine.world,p.body);
+    for(let i=0;i<(frames||40);i++) step(g);
+    const d=g.bar.position.y-y0;
+    M.Composite.add(g.engine.world,p.body); p.alive=true; restore(snap); g.pegs.forEach((q,i)=>q.load=loads[i]);
+    return d; }
+  // contact forces for the current frame: [{a,b,x1,y1,x2,y2,f}]
+  function forces(g){ const out=[];
+    for(const pr of g.engine.pairs.list){ if(!pr.isActive) continue; const cs=pr.activeContacts; if(!cs.length) continue;
+      let f=0,vx=0,vy=0; for(const c of cs){ f+=Math.abs(c.normalImpulse||0); vx+=c.vertex.x; vy+=c.vertex.y; } vx/=cs.length; vy/=cs.length;
+      const A=pr.bodyA.parent||pr.bodyA, B=pr.bodyB.parent||pr.bodyB;
+      const pa=A._peg&&A._peg.alive, pb=B._peg&&B._peg.alive; if(!pa&&!pb) continue;
+      const P1=pa?A.position:{x:vx,y:vy}, P2=pb?B.position:{x:vx,y:vy};
+      out.push({x1:P1.x,y1:P1.y,x2:P2.x,y2:P2.y,f}); }
+    return out; }
+  const barVel=g=>M.Body.getVelocity(g.bar).y;
+  const shut=g=>barBottom(g)>=C.SHUT_Y;
+  return {C,create,alive,step,shut,barBottom,probe,forces,barVel};
+}
+function startGame(){
+const $=id=>document.getElementById(id);
+const M=Phaser.Physics.Matter.Matter;
+const core=makeCore(M);
+const C=core.C, X0=(C.L+C.R)/2;
+const reduceMotion=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+const COLORS={
+  y:{base:0xF2C21B,dark:0xB0860A,light:0xFFE48A},
+  b:{base:0x2452B8,dark:0x14306E,light:0x6E94E4},
+  r:{base:0xD8262E,dark:0x8A1116,light:0xF47C80},
+};
+const DIFF={easy:{eye:0.3,caution:0.7,probes:2,noise:5},normal:{eye:0.6,caution:1,probes:4,noise:3},hard:{eye:0.9,caution:1.3,probes:7,noise:1.2}};
+const PXCM=(C.BOT-C.TOP)/17;            // the tray is 17 cm long
+const SNAP=7;                             // bar travel (px) in one pull that snaps the trap (about 1.9 mm)
+const cm=px=>(px/PXCM).toFixed(1)+' cm';
+let players=1;
+const DEAD_ZONE=0.35; // px
+const human=who=>who==='you'||players===2;
+const NAME={you:'You',ai:'The computer'};
+const nameOf=who=>players===2?(who==='you'?'Player 1':'Player 2'):NAME[who];
+let showForces=false;
+let difficulty='normal';
+
+// ---------- sound ----------
+const Snd={ctx:null,on:true,
+  init(){ if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(this.ctx&&this.ctx.state==='suspended') this.ctx.resume(); },
+  tone(f0,f1,dur,type,vol){ if(!this.on||!this.ctx) return; const t=this.ctx.currentTime,o=this.ctx.createOscillator(),g=this.ctx.createGain();
+    o.type=type||'sine'; o.frequency.setValueAtTime(f0,t); o.frequency.exponentialRampToValueAtTime(f1,t+dur);
+    g.gain.setValueAtTime(vol||0.15,t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur); o.connect(g).connect(this.ctx.destination); o.start(t); o.stop(t+dur+0.02); },
+  noise(dur,freq,vol,type){ if(!this.on||!this.ctx) return; const c=this.ctx,t=c.currentTime,n=Math.floor(c.sampleRate*dur),b=c.createBuffer(1,n,c.sampleRate),d=b.getChannelData(0);
+    for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2);
+    const s=c.createBufferSource(); s.buffer=b; const f=c.createBiquadFilter(); f.type=type||'bandpass'; f.frequency.value=freq; const g=c.createGain(); g.gain.value=vol||0.3;
+    s.connect(f).connect(g).connect(c.destination); s.start(t); },
+  pull(){ this.noise(0.05,2200,0.25); this.tone(420,760,0.09,'sine',0.12); },
+  drop(){ this.noise(0.04,1600,0.18); },
+  snap(){ this.noise(0.28,700,0.6,'lowpass'); this.tone(140,45,0.3,'triangle',0.35); this.noise(0.06,3000,0.35); },
+  bank(){ this.tone(660,660,0.12,'sine',0.1); setTimeout(()=>this.tone(990,990,0.16,'sine',0.1),90); },
+  lose(){ this.tone(300,120,0.35,'sawtooth',0.06); },
+};
+
+// ---------- HUD ----------
+const ui={
+  status:t=>{$('status').textContent=t;},
+  scores(s){ $('you-pts').textContent=s.you; $('ai-pts').textContent=s.ai; },
+  seat(who){ $('seat-you').classList.toggle('on',who==='you'); $('seat-ai').classList.toggle('on',who==='ai'); },
+  bank(enabled,pot){ const b=$('bank'); b.disabled=!enabled; b.textContent=pot>0?`Bank ${pot}`:'Bank'; },
+};
+
+class TrapScene extends Phaser.Scene{
+  constructor(){ super('trap'); }
+  create(){
+    this.makeTextures();
+    this.drawBoard();
+    this.springG=this.add.graphics().setDepth(1);
+    this.stickG=this.add.graphics().setDepth(0.9);
+    this.markerG=this.add.graphics().setDepth(11);
+    this.hoverG=this.add.graphics().setDepth(7);
+    this.aimG=this.add.graphics().setDepth(7);
+    this.forceG=this.add.graphics().setDepth(3.5);
+    this.g=null; this.pegObjs=[]; this.pot=[]; this.watch=null; this.running=false;
+    this.turn=null; this.busy=true; this.over=true;
+    this.scores={you:0,ai:0};
+    this.input.on('pointerdown',p=>this.onTap(p));
+    this.input.on('pointermove',p=>this.onHover(p));
+    this.input.on('pointerout',()=>this.hoverG.clear());
+    this.newGame(false);
+    ui.status('Choose one or two players, then set the trap.');
+  }
+
+  // ---------- textures ----------
+  makeTextures(){
+    const mk=(key,w,h,fn)=>{ const g=this.make.graphics({x:0,y:0,add:false}); fn(g); g.generateTexture(key,w,h); g.destroy(); };
+    for(const t of C.TYPES){ const col=COLORS[t.key], r=t.r, c=r+2, S=c*2;
+      mk('peg-'+t.key,S,S,g=>{
+        g.fillStyle(col.dark,1).fillCircle(c,c,r);
+        g.fillStyle(col.base,1).fillCircle(c,c,r-1.6);
+        g.fillStyle(col.light,0.35).fillCircle(c-r*0.18,c-r*0.2,r*0.78);
+        g.fillStyle(col.base,1).fillCircle(c,c,r*0.74);
+        g.fillStyle(col.dark,0.55).fillCircle(c+r*0.06,c+r*0.08,r*0.5);   // stem shadow ring
+        g.fillStyle(col.base,1).fillCircle(c,c,r*0.44);                   // stem top
+        g.fillStyle(col.light,0.9).fillCircle(c-r*0.12,c-r*0.14,r*0.2);   // knob highlight
+      });
+    }
+    mk('shadow',48,48,g=>{ for(let i=6;i>=0;i--){ g.fillStyle(0x3A2410,0.06).fillCircle(24,24,17+i); } g.fillStyle(0x3A2410,0.22).fillCircle(24,24,17); });
+    const bw=C.R-C.L-2, bh=C.BAR_H;
+    mk('bar',bw,bh+6,g=>{
+      g.fillStyle(0x3A2410,0.25).fillRect(2,5,bw-2,bh);
+      g.fillStyle(0xB9864A,1).fillRect(0,0,bw,bh);
+      g.fillStyle(0xE6C286,1).fillRect(0,1,bw,bh-4);
+      g.fillStyle(0xF3D9A6,1).fillRect(0,2,bw,3);
+      g.lineStyle(1,0xC79A5E,0.6); for(let i=0;i<6;i++){ const y=6+i*1.6; g.lineBetween(0,y,bw,y+(i%2?1:-1)); }
+      g.fillStyle(0x8A5E2E,1).fillRect(0,0,3,bh).fillRect(bw-3,0,3,bh);
+    });
+  }
+
+  drawBoard(){
+    // Two layers: the floor goes under the pegs, the wooden frame and rulers go over them.
+    // Pegs pressed against a wall simply slide under the wood; no masks needed (masks are slow on phones).
+    const g=this.add.graphics().setDepth(0), fr=this.add.graphics().setDepth(10);
+    const {L,R,TOP,BOT}=C, F=24, W2=R-L+2*F;
+    g.fillStyle(0x000000,0.22).fillRoundedRect(L-F+6,TOP-F+10,W2,BOT-TOP+2*F,6);
+    g.fillStyle(0xD7AE6C,1).fillRoundedRect(L-F,TOP-F,W2,BOT-TOP+2*F,5);
+    let seed=11; const rnd=()=>(seed=(seed*16807)%2147483647)/2147483647;
+    // floor
+    g.fillStyle(0xEFD8A8,1).fillRect(L,TOP,R-L,BOT-TOP);
+    g.lineStyle(1,0xDDBE85,0.55);
+    for(let i=0;i<60;i++){ const y=TOP+rnd()*(BOT-TOP); const x=L+4+rnd()*(R-L-60); g.lineBetween(x,y,Math.min(R-4,x+40+rnd()*120),y+rnd()*2-1); }
+    g.fillStyle(0x6B4418,0.18).fillRect(L,TOP,R-L,5).fillRect(L,TOP,5,BOT-TOP);
+    g.fillStyle(0xFFFFFF,0.18).fillRect(R-3,TOP,3,BOT-TOP).fillRect(L,BOT-3,R-L,3);
+    const sy=C.SHUT_Y;
+    g.lineStyle(1.5,0xB42025,0.35);
+    for(let x=L+4;x<R-4;x+=12) g.lineBetween(x,sy,x+6,sy);
+    // frame strips (over the pegs)
+    fr.fillStyle(0xD7AE6C,1);
+    fr.fillRoundedRect(L-F,TOP-F,W2,F,{tl:5,tr:5,bl:0,br:0});
+    fr.fillRoundedRect(L-F,BOT,W2,F,{tl:0,tr:0,bl:5,br:5});
+    fr.fillRect(L-F,TOP,F,BOT-TOP); fr.fillRect(R,TOP,F,BOT-TOP);
+    fr.fillStyle(0xE6C689,1);
+    fr.fillRoundedRect(L-F+2,TOP-F+2,W2-4,F-2,{tl:4,tr:4,bl:0,br:0});
+    fr.fillRoundedRect(L-F+2,BOT,W2-4,F-4,{tl:0,tr:0,bl:4,br:4});
+    fr.fillRect(L-F+2,TOP,F-2,BOT-TOP); fr.fillRect(R,TOP,F-2,BOT-TOP);
+    fr.lineStyle(1,0xC4955A,0.45);
+    for(let i=0;i<22;i++){ const y=TOP-F+4+rnd()*(BOT-TOP+2*F-8); fr.lineBetween(L-F+3,y,L-3,y+rnd()*6-3); fr.lineBetween(R+3,y,R+F-3,y+rnd()*6-3); }
+    // rulers: 0-17 cm, mm ticks
+    for(let mm=0; mm<=170; mm++){
+      const y=BOT-mm*PXCM/10; if(y<TOP-0.5) break;
+      const len=mm%10===0?8:mm%5===0?5.5:3, a=mm%10===0?0.95:mm%5===0?0.8:0.45;
+      fr.lineStyle(mm%10===0?1.2:0.8,0x5A3A18,a);
+      fr.lineBetween(L-len-1,y,L-1,y); fr.lineBetween(R+1,y,R+len+1,y);
+    }
+    const ts={fontFamily:'Rubik, sans-serif',fontSize:'8px',color:'#5A3A18'}, labels=[];
+    for(let cm=0;cm<=17;cm++){ const y=BOT-cm*PXCM;
+      labels.push(this.add.text(L-11,y,String(cm),ts).setOrigin(1,0.5));
+      labels.push(this.add.text(R+11,y,String(cm),ts).setOrigin(0,0.5));
+    }
+    labels.push(this.add.text(L-F+3,TOP-F+5,'cm',ts));
+    fr.fillStyle(0x151515,1);
+    fr.fillTriangle(L-F+1,sy-6,L-F+1,sy+6,L-F+9,sy);
+    fr.fillTriangle(R+F-1,sy-6,R+F-1,sy+6,R+F-9,sy);
+    fr.fillStyle(0x3A2410,0.8).fillEllipse(this.stickX(),TOP-F/2,12,7);
+    // Bake both layers into plain images once. Hundreds of ruler ticks and grain lines
+    // would otherwise be re-drawn by the phone every single frame.
+    const S=2; // bake at 2x so it stays sharp on high-density screens
+    const bake=(items,depth)=>{ const rt=this.add.renderTexture(0,0,C.W*S,C.H*S).setOrigin(0,0).setScale(1/S).setDepth(depth);
+      rt.camera.setZoom(S); rt.camera.centerOn(C.W/2,C.H/2); rt.draw(items); items.forEach(o=>o.destroy()); return rt; };
+    bake([g],0); bake([fr,...labels],10);
+  }
+  stickX(){ return X0; }
+
+  // ---------- game setup ----------
+  newGame(run){
+    for(const o of this.pegObjs){ o.spr.destroy(); o.sh.destroy(); }
+    for(const o of this.pot){ o.spr.destroy(); o.sh.destroy(); }
+    this.pot=[]; this.pegObjs=[]; this.watch=null; this.barY=undefined;
+    this.g=core.create();
+    this.barSpr=this.barSpr||this.add.image(0,0,'bar').setOrigin(0.5,0.36).setDepth(4);
+    for(const p of this.g.pegs){
+      const sh=this.add.image(0,0,'shadow').setDepth(2).setScale(p.r/17);
+      const spr=this.add.image(0,0,'peg-'+p.key).setDepth(3);
+      const o={p,spr,sh,free:false}; p.o=o; this.pegObjs.push(o);
+    }
+    this.syncSprites();
+    this.scores={you:0,ai:0}; ui.scores(this.scores); ui.bank(false,0);
+    this.over=!run; this.busy=true; this.turn=null;
+    this.running=run; this.setupFrames=0; this.stillFrames=0;
+    if(run){ ui.status('Pouring in the pegs…'); ui.seat(null); }
+    this.pourSaid=false;
+  }
+
+  // ---------- rendering ----------
+  syncSprites(){
+    // Dead zone: a sprite only follows its body once the body has moved more than DEAD_ZONE px
+    // from where the sprite is drawn. Sub-pixel solver jitter never reaches the screen; real
+    // movement (sliding, snapping) still shows at once. Physics itself is untouched.
+    for(const o of this.pegObjs){ if(o.free||!o.p.alive) continue; const b=o.p.body.position;
+      if(o.dx===undefined||Math.hypot(b.x-o.dx,b.y-o.dy)>DEAD_ZONE){ o.dx=b.x; o.dy=b.y;
+        o.spr.setPosition(b.x,b.y); o.sh.setPosition(b.x+1.5,b.y+2.5); } }
+    const bb=this.g.bar.position.y;
+    if(this.barY===undefined||Math.abs(bb-this.barY)>DEAD_ZONE) this.barY=bb;
+    const by=this.barY;
+    this.barSpr.setPosition(X0,by);
+    const sg=this.springG; sg.clear();
+    const top=C.TOP+2, bot=by-C.BAR_H/2, coils=13, wdt=17, cx=X0;
+    sg.lineStyle(3,0x7C8791,1); sg.beginPath(); sg.moveTo(cx,top);
+    for(let i=1;i<=coils*2;i++){ const y=top+(bot-top)*i/(coils*2); sg.lineTo(cx+(i%2?wdt:-wdt),y); }
+    sg.lineTo(cx,bot); sg.strokePath();
+    sg.lineStyle(1.2,0xD7DEE4,0.8); sg.beginPath(); sg.moveTo(cx,top);
+    for(let i=1;i<=coils*2;i++){ const y=top+(bot-top)*i/(coils*2)-1; sg.lineTo(cx+(i%2?wdt:-wdt)-1,y); }
+    sg.strokePath();
+    const st=this.stickG, sx=this.stickX(); st.clear();
+    st.fillStyle(0x3A2410,0.2).fillRect(sx-2,-10,9,by-C.BAR_H/2+12);
+    st.fillStyle(0xD9B375,1).fillRect(sx-4,-10,8,by-C.BAR_H/2+10);
+    st.fillStyle(0xF1D7A2,1).fillRect(sx-3,-10,2,by-C.BAR_H/2+10);
+    st.fillStyle(0x8A5E2E,1).fillRect(sx-7,by-C.BAR_H/2-4,14,5);
+    const mg=this.markerG; mg.clear(); mg.fillStyle(0xB42025,1);
+    mg.fillTriangle(C.L-2,by,C.L-10,by-5,C.L-10,by+5);
+    mg.fillTriangle(C.R+2,by,C.R+10,by-5,C.R+10,by+5);
+    // force chains: line width follows the contact force
+    const fg=this.forceG; fg.clear();
+    if(showForces){
+      for(const f of core.forces(this.g)){ if(f.f<0.05) continue;
+        const w=Math.min(7,0.8+Math.sqrt(f.f)*1.7), a=Math.min(0.9,0.25+f.f*0.25);
+        fg.lineStyle(w,0xB42025,a).lineBetween(f.x1,f.y1,f.x2,f.y2); }
+    }
+  }
+
+  // ---------- main loop: the bar presses on the pegs every frame ----------
+  update(time,delta){
+    // Physics runs at a fixed 60 steps per second: same speed on 60, 90 or 120 Hz screens,
+    // and a slow phone catches up with at most 2 extra steps instead of freezing.
+    this.acc=Math.min((this.acc||0)+delta,1000/60*3);
+    while(this.acc>=1000/60){ this.acc-=1000/60; this.tick(); }
+    this.syncSprites();
+  }
+  tick(){
+    if(this.g&&this.running){
+      core.step(this.g);
+      const vy=Math.abs(core.barVel(this.g));
+      if(this.g.phase==='press'&&!this.pourSaid&&!this.over){ this.pourSaid=true; Snd.drop(); ui.status('Setting the trap…'); }
+      if(this.turn===null&&!this.over){ // initial clamp
+        if(this.g.phase==='press'){ this.setupFrames++; this.stillFrames=vy<0.02?this.stillFrames+1:0; }
+        if(this.g.phase==='press'&&this.setupFrames>60&&this.stillFrames>40) this.startTurn('you');
+      }
+      if(this.watch) this.runWatch(vy);
+    }
+    }
+  runWatch(vy){
+    const w=this.watch; w.frames++;
+    const moved=this.g.bar.position.y-w.y0; w.maxMoved=Math.max(w.maxMoved,moved);
+    if(!w.snapped&&moved>=SNAP){ w.snapped=true; this.snapFx(w.who); }
+    w.still=vy<0.02?w.still+1:0;
+    if((w.frames>=45&&w.still>=15)||w.frames>=200){ this.watch=null; w.physDone=true; w.moved=moved; this.resolvePull(w); }
+  }
+
+  // ---------- turns ----------
+  startTurn(who){
+    if(this.over) return;
+    if(core.alive(this.g).length===0) return this.endGame('Every peg is out.');
+    if(core.shut(this.g)) return this.endGame('The trap has shut.');
+    this.turn=who; this.pullsThisTurn=0; this.busy=false; this.greed=5+Math.random()*10; ui.seat(who);
+    ui.bank(false,0);
+    if(players===2) this.turnBanner(nameOf(who));
+    if(human(who)) ui.status(players===2?`${nameOf(who)}'s turn. Tap a peg to pull it.`:'Your turn. Tap a peg to pull it.');
+    else { ui.status('The computer is studying the pegs…'); this.busy=true; this.time.delayedCall(750,()=>this.aiStep()); }
+  }
+  // big "Player N" sign in the empty top of the tray when the turn changes (2-player mode)
+  turnBanner(name){
+    if(this.banner) this.banner.destroy();
+    const by=this.g.bar.position.y-C.BAR_H/2, cy=Math.max(C.TOP+60,(C.TOP+by)/2+18);
+    const c=this.add.container(C.W/2,cy).setDepth(9);
+    const t1=this.add.text(0,-12,name,{fontFamily:'Rubik, sans-serif',fontStyle:'900',fontSize:'34px',color:'#14202C'}).setOrigin(0.5);
+    const t2=this.add.text(0,20,'YOUR TURN',{fontFamily:'Rubik, sans-serif',fontStyle:'700',fontSize:'14px',color:'#14202C'}).setOrigin(0.5);
+    const w=Math.max(t1.width,t2.width)+48, hgt=84;
+    const bg=this.add.graphics();
+    bg.fillStyle(0x8A6508,1).fillRoundedRect(-w/2,-hgt/2+4,w,hgt,16);
+    bg.fillStyle(0xF2C21B,1).fillRoundedRect(-w/2,-hgt/2,w,hgt,16);
+    c.add([bg,t1,t2]); c.setScale(0.6).setAlpha(0);
+    this.banner=c;
+    this.tweens.add({targets:c,scale:1,alpha:1,duration:220,ease:'Back.easeOut'});
+    this.tweens.add({targets:c,alpha:0,scale:0.9,delay:1300,duration:350,onComplete:()=>{ c.destroy(); if(this.banner===c) this.banner=null; }});
+  }
+  potValue(){ return this.pot.reduce((s,o)=>s+o.p.v,0); }
+  potSlot(i){ const c=i%8, row=Math.floor(i/8); // four each side of the spring
+    const x=c<4?C.L+22+c*38:C.R-22-(7-c)*38; return {x, y:C.TOP+24+row*40}; }
+
+  pegAt(x,y){
+    let best=null,bd=1e9;
+    for(const p of core.alive(this.g)){ const d=Math.hypot(p.body.position.x-x,p.body.position.y-y); if(d<p.r+6&&d<bd){bd=d;best=p;} }
+    return best;
+  }
+  onHover(ptr){
+    this.hoverG.clear();
+    if(!human(this.turn)||this.busy||this.over) return;
+    const p=this.pegAt(ptr.worldX,ptr.worldY); if(!p) return;
+    this.hoverG.lineStyle(2.5,0xffffff,0.9).strokeCircle(p.body.position.x,p.body.position.y,p.r+3);
+  }
+  // double-click / double-tap on the spring toggles the force-chain view
+  onSpring(x,y){
+    const by=this.g.bar.position.y-C.BAR_H/2;
+    return Math.abs(x-X0)<=30 && y>=C.TOP && y<=by;
+  }
+  onTap(ptr){
+    const x=ptr.worldX,y=ptr.worldY;
+    if(this.onSpring(x,y)){
+      const now=this.time.now;
+      if(this.lastSpringTap&&now-this.lastSpringTap<400){ showForces=!showForces; this.lastSpringTap=0; }
+      else this.lastSpringTap=now;
+      return;
+    }
+    if(!human(this.turn)||this.busy||this.over) return;
+    const p=this.pegAt(ptr.worldX,ptr.worldY); if(!p) return;
+    Snd.init(); this.hoverG.clear();
+    this.pull(p,this.turn);
+  }
+
+  pull(p,who){
+    this.busy=true; ui.bank(false,this.potValue());
+    const o=p.o; o.free=true; p.alive=false;
+    M.Composite.remove(this.g.engine.world,p.body);
+    Snd.pull();
+    const slot=this.potSlot(this.pot.length);
+    this.pot.push(o);
+    const w={who,y0:this.g.bar.position.y,frames:0,still:0,maxMoved:0,snapped:false,physDone:false,animDone:false};
+    this.watch=w;
+    o.spr.setDepth(8); o.sh.setDepth(7);
+    this.tweens.add({targets:o.spr,scale:1.3,duration:200,ease:'Quad.easeOut'});
+    this.tweens.add({targets:o.sh,x:o.spr.x+9,y:o.spr.y+13,alpha:0.6,scale:(p.r/17)*1.2,duration:200,ease:'Quad.easeOut'});
+    this.time.delayedCall(220,()=>{
+      this.tweens.add({targets:o.spr,x:slot.x,y:slot.y,scale:0.7,duration:360,ease:'Cubic.easeInOut',
+        onComplete:()=>{ o.spr.setDepth(6); o.sh.setDepth(5); if(!w.snapped) Snd.drop(); w.animDone=true; this.resolvePull(w); }});
+      this.tweens.add({targets:o.sh,x:slot.x+1.5,y:slot.y+2.5,alpha:1,scale:(p.r/17)*0.7,duration:360,ease:'Cubic.easeInOut'});
+    });
+  }
+  // called when the peg animation and the physics watch have both finished
+  resolvePull(w){
+    if(!w.physDone||!w.animDone||w.resolved||this.over) return;
+    w.resolved=true;
+    const who=w.who;
+    if(w.snapped) return this.afterSnap(who,w.moved);
+    if(core.shut(this.g)){ return this.endGame('The trap has shut.'); }
+    this.pullsThisTurn++;
+    const pv=this.potValue(), slip=w.moved>=3?` Slipped ${cm(w.moved)}.`:'';
+    if(core.alive(this.g).length===0){ this.bank(who); return; }
+    if(human(who)){
+      this.busy=false; ui.bank(true,pv);
+      ui.status(`${pv} at stake.${slip} Pull again or bank.`);
+    } else {
+      ui.status(`The computer has ${pv} at stake.${slip}`);
+      this.time.delayedCall(650,()=>this.aiStep());
+    }
+  }
+  bank(who){
+    if(this.over) return;
+    this.busy=true; ui.bank(false,0);
+    const pv=this.potValue(); this.scores[who]+=pv; ui.scores(this.scores);
+    Snd.bank();
+    ui.status(`${nameOf(who)} banked ${pv}.`);
+    const targetX=who==='you'?C.L+10:C.R-10;
+    this.pot.forEach((o,i)=>{ 
+      this.tweens.add({targets:[o.spr,o.sh],x:targetX,y:-30,alpha:0,duration:420,delay:i*45,ease:'Cubic.easeIn',onComplete:()=>{o.spr.destroy();o.sh.destroy();}});
+    });
+    this.pot=[];
+    this.time.delayedCall(700,()=>this.startTurn(who==='you'?'ai':'you'));
+  }
+  snapFx(who){
+    Snd.snap();
+    if(!reduceMotion) this.cameras.main.shake(320,0.014);
+    this.cameras.main.flash(120,216,38,46,false);
+    const t=this.add.text(C.W/2,C.TOP+170,'SNAP!',{fontFamily:'Rubik, sans-serif',fontStyle:'900',fontSize:'64px',color:'#ffffff',stroke:'#151515',strokeThickness:8}).setOrigin(0.5).setDepth(12).setScale(0.4).setAngle(-6);
+    this.tweens.add({targets:t,scale:1,duration:260,ease:'Back.easeOut'});
+    this.tweens.add({targets:t,alpha:0,delay:1100,duration:400,onComplete:()=>t.destroy()});
+    ui.status(human(who)?'Snap! That peg was holding the bar back.':'Snap! The computer pulled a peg that was holding the bar.');
+  }
+  afterSnap(who,moved){
+    const lost=this.potValue();
+    Snd.lose();
+    const jump=`The bar jumped ${cm(moved)}.`;
+    ui.status(`${jump} ${nameOf(who)} lost ${lost}.`);
+    this.pot.forEach((o,i)=>{
+      this.tweens.add({targets:[o.spr,o.sh],alpha:0,scale:0.3,y:'+=30',angle:120,duration:450,delay:i*40,onComplete:()=>{o.spr.destroy();o.sh.destroy();}});
+    });
+    this.pot=[];
+    this.time.delayedCall(1300,()=>{
+      if(core.shut(this.g)) this.endGame('The trap has shut.');
+      else this.startTurn(who==='you'?'ai':'you');
+    });
+  }
+
+  // ---------- computer player ----------
+  // It reads the contact forces on each peg, then test-pulls its favourite
+  // candidates in a rewound simulation. Its predictions get noisier on easier levels.
+  aiStep(){
+    if(this.over) return;
+    const al=core.alive(this.g);
+    if(al.length===0) return this.bank('ai');
+    const d=DIFF[difficulty];
+    const maxLoad=Math.max(0.01,...al.map(p=>p.load));
+    const ranked=al.map(p=>({p,s:p.v*0.6-(p.load/maxLoad)*3*d.eye+Math.random()*1.5})).sort((a,b)=>b.s-a.s);
+    // Test-pull one candidate per frame so the phone never freezes while the computer thinks.
+    const list=ranked.slice(0,d.probes), cands=[];
+    const next=()=>{
+      if(this.over||this.turn!=='ai') return;
+      if(cands.length<list.length){
+        const c=list[cands.length];
+        if(!c.p.alive){ cands.push({p:c.p,risk:1,score:-1e9}); }
+        else { const pred=core.probe(this.g,c.p,40)+(Math.random()*2-1)*d.noise*1.7;
+          const risk=1/(1+Math.exp(-(pred-SNAP*0.75)/1.5));
+          cands.push({p:c.p,risk,score:c.p.v*(1-risk)-risk*(this.potValue()+c.p.v)*d.caution}); }
+        this.time.delayedCall(20,next); return;
+      }
+      this.aiDecide(cands.sort((a,b)=>b.score-a.score)[0],d);
+    };
+    next();
+  }
+  aiDecide(best,d){
+    if(this.pullsThisTurn>0){
+      const pot=this.potValue(), ev=best.p.v*(1-best.risk)-pot*best.risk*d.caution+(Math.random()-0.5)*0.6;
+      if(ev<=0||pot>=this.greed||this.pullsThisTurn>=8) return this.bank('ai');
+    }
+    const a=this.aimG, p=best.p; a.clear();
+    let k=0; const blink=this.time.addEvent({delay:110,repeat:4,callback:()=>{ a.clear(); if(k++%2===0){ const bp=p.body.position; a.lineStyle(3,0xffffff,0.95).strokeCircle(bp.x,bp.y,p.r+3);} }});
+    this.time.delayedCall(620,()=>{ a.clear(); blink.remove(); this.pull(p,'ai'); });
+  }
+
+  quit(){
+    this.time.removeAllEvents(); this.tweens.killAll(); this.cameras.main.resetFX();
+    this.children.list.filter(c=>c.type==='Text'&&c.depth===12).forEach(c=>c.destroy());
+    this.aimG.clear(); this.hoverG.clear();
+    this.newGame(false); ui.seat(null);
+    ui.status('Choose one or two players, then set the trap.');
+  }
+  endGame(reason){
+    this.over=true; this.busy=true; ui.seat(null); ui.bank(false,0);
+    const {you,ai}=this.scores;
+    $('end-title').textContent=you===ai?"It's a draw":players===2?`${nameOf(you>ai?'you':'ai')} wins`:(you>ai?'You win':'The computer wins');
+    $('end-reason').textContent=reason;
+    $('end-score').textContent=you===ai?`Both on ${you} points.`:`${Math.max(you,ai)} to ${Math.min(you,ai)}.`;
+    ui.status(reason);
+    this.time.delayedCall(900,()=>{ $('end').hidden=false; $('again').focus(); });
+  }
+}
+
+let game=null;
+// Start once the font is ready, so the ruler numbers are baked in the right typeface.
+const fontReady=(document.fonts&&document.fonts.load)?Promise.race([document.fonts.load('400 8px Rubik'),new Promise(r=>setTimeout(r,1500))]):Promise.resolve();
+fontReady.catch(()=>{}).then(()=>{
+game=new Phaser.Game({
+  type:Phaser.AUTO, parent:'stage', width:C.W, height:C.H, transparent:true,
+  scale:{mode:Phaser.Scale.FIT, autoCenter:Phaser.Scale.CENTER_BOTH},
+  physics:{default:'matter',matter:{gravity:{x:0,y:0},autoUpdate:false,debug:false}},
+  scene:[TrapScene],
+});
+window.trapGame=game;
+});
+const scene=()=>game.scene.getScene('trap');
+
+$('bank').addEventListener('click',()=>{ const s=scene(); if(human(s.turn)&&!s.busy&&s.pot.length) s.bank(s.turn); });
+$('mute').addEventListener('click',()=>{ Snd.on=!Snd.on; $('mute').textContent=Snd.on?'♪':'✕'; $('mute').setAttribute('aria-label',Snd.on?'Mute sound':'Turn sound on'); });
+document.querySelectorAll('#skill button').forEach(b=>b.addEventListener('click',()=>{
+  difficulty=b.dataset.d; document.querySelectorAll('#skill button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+}));
+document.querySelectorAll('#mode button').forEach(b=>b.addEventListener('click',()=>{
+  players=+b.dataset.p; document.querySelectorAll('#mode button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));
+  $('skill').hidden=players===2;
+}));
+function toMenu(){ $('confirm').hidden=true; $('end').hidden=true; scene().quit(); $('intro').hidden=false; $('start').focus(); }
+$('menu').addEventListener('click',()=>{
+  if(!$('intro').hidden) return;
+  const s=scene(); if(s.over||!s.running) return toMenu();
+  $('confirm').hidden=false; $('keep').focus();
+});
+$('keep').addEventListener('click',()=>{ $('confirm').hidden=true; });
+$('quit').addEventListener('click',toMenu);
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&!$('confirm').hidden) $('confirm').hidden=true; });
+$('about-open').addEventListener('click',()=>{ $('intro').hidden=true; $('about').hidden=false; $('about-close').focus(); });
+$('about-close').addEventListener('click',()=>{ $('about').hidden=true; $('intro').hidden=false; $('about-open').focus(); });
+function applyNames(){ document.querySelector('#seat-you .who').textContent=players===2?'Player 1':'You';
+  document.querySelector('#seat-ai .who').textContent=players===2?'Player 2':'Computer'; }
+$('start').addEventListener('click',()=>{ applyNames(); Snd.init(); $('intro').hidden=true; scene().newGame(true); });
+$('again').addEventListener('click',()=>{ Snd.init(); $('end').hidden=true; $('intro').hidden=false; $('start').focus(); });
+}
+// Boot: uses only the local phaser.min.js (Phaser 3.80.1) next to this file.
+(function boot(){
+  // The game is built for Phaser 3 (tested with 3.80.1). Phaser 4 renders it incorrectly.
+  const ok=()=>window.Phaser&&/^3\./.test(window.Phaser.VERSION||'');
+  if(ok()) return startGame();
+  const found=window.Phaser?window.Phaser.VERSION:null;
+  const fail=()=>{ const sub=document.querySelector('#intro .sub'); const b=document.getElementById('start');
+    if(sub) sub.textContent=found?`This game needs Phaser 3.80.1, but phaser.min.js is version ${found}. Replace it with Phaser 3.80.1.`:'The game engine (phaser.min.js) could not be loaded. Put phaser.min.js in the same folder as index.html.';
+    if(b){ b.disabled=true; b.textContent='Game engine missing'; } };
+  fail();
+})();
+</script>
+</body>
+</html>
