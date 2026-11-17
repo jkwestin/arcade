@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Tomtens räkneverkstad</title>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;height:100%;background:#0b1d3a;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  #game{width:100%;height:100%}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
+</head>
+<body>
+<div id="game"></div>
+<script>
+/* =========================================================
+   Tomtens räkneverkstad – julkalender med plus/minus 0–10
+   ========================================================= */
+const W = 720, H = 1280;
+const FONT = 'Fredoka, system-ui, "Segoe UI", Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
+const N_Q = 6;                                   // uppgifter per lucka
+const GAMES = ['Paket', 'Kakor', 'Snoboll'];     // roterar lucka för lucka
+const GAME_NAMES = { Paket: 'Paketlagret', Kakor: 'Pepparkaksbageriet', Snoboll: 'Snöbollskriget' };
+const GAME_ICON = { Paket: '🎁', Kakor: '🍪', Snoboll: '❄️' };
+
+
+/* ---------- Sparning ---------- */
+const SAVE_KEY = 'tomtens-rakneverkstad-v1';
+let save = { done: {}, stats: {}, sfxOff: false, musicOff: false };
+try {
+  const s = JSON.parse(localStorage.getItem(SAVE_KEY));
+  if (s && s.done) save = Object.assign(save, s);
+  if (save.muted) { save.sfxOff = save.musicOff = true; } delete save.muted;   // äldre sparformat
+} catch (e) {}
+function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} }
+function doneCount() { return Object.keys(save.done).length; }
+function isUnlocked(d) { return d === 1 || !!save.done[d - 1] || !!save.done[d]; }
+function record(key, ok) {
+  const s = save.stats[key] || (save.stats[key] = { r: 0, w: 0 });
+  ok ? s.r++ : s.w++;
+  persist();
+}
+
+/* ---------- Uppgifter ---------- */
+const FACTS = [];
+for (let a = 0; a <= 10; a++) for (let b = 0; b <= 10; b++) {
+  if (a + b <= 10) FACTS.push({ a, b, op: '+', r: a + b });
+  if (a - b >= 0) FACTS.push({ a, b, op: '-', r: a - b });
+}
+const factKey = f => f.a + f.op + f.b;
+
+// Svårighet stiger lucka för lucka
+function stage(day) {
+  if (day <= 4)  return { ops: ['+'], max: 6, miss: 0 };
+  if (day <= 8)  return { ops: ['+'], max: 10, miss: 0 };
+  if (day <= 10) return { ops: ['-'], max: 6, miss: 0 };
+  if (day <= 14) return { ops: ['-'], max: 10, miss: 0 };
+  if (day <= 18) return { ops: ['+', '-'], max: 10, miss: 0.25 };
+  return { ops: ['+', '-'], max: 10, miss: 0.4 };
+}
+// Uppgifter barnet svarat fel på kommer oftare
+function weightOf(f) {
+  const s = save.stats[factKey(f)] || { r: 0, w: 0 };
+  let w = 1 + 2.5 * Math.max(0, s.w - 0.5 * s.r);
+  if (f.a === 0 || f.b === 0) w *= 0.35;
+  if (s.r >= 3 && s.w === 0) w *= 0.5;
+  return w;
+}
+function makeProblem(day, used) {
+  const st = stage(day);
+  let pool = FACTS.filter(f => st.ops.includes(f.op) && f.a <= st.max && (f.op === '-' || f.r <= st.max));
+  const fresh = pool.filter(f => !used.has(factKey(f)));
+  if (fresh.length) pool = fresh;
+  const ws = pool.map(weightOf);
+  let r = Math.random() * ws.reduce((x, y) => x + y, 0);
+  let f = pool[pool.length - 1];
+  for (let i = 0; i < pool.length; i++) { r -= ws[i]; if (r <= 0) { f = pool[i]; break; } }
+  const missing = Math.random() < st.miss;
+  return Object.assign({}, f, { key: factKey(f), missing, answer: missing ? f.b : f.r });
+}
+function makeChoices(ans) {
+  const s = new Set([ans]);
+  const near = Phaser.Utils.Array.Shuffle([ans - 1, ans + 1, ans - 2, ans + 2, ans + 3, ans - 3].filter(v => v >= 0 && v <= 10));
+  for (const v of near) { if (s.size >= 4) break; s.add(v); }
+  while (s.size < 4) s.add(Phaser.Math.Between(0, 10));
+  return Phaser.Utils.Array.Shuffle([...s]);
+}
+function problemString(p, solved) {
+  const sym = p.op === '+' ? '+' : '−';
+  const q = solved ? String(p.answer) : '?';
+  return p.missing ? `${p.a} ${sym} ${q} = ${p.r}` : `${p.a} ${sym} ${p.b} = ${q}`;
+}
+
+/* ---------- Ljud: korta syntljud ---------- */
+let actx = null;
+function ctx() { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; }
+function unlockAudio() { try { const c = ctx(); if (c.state === 'suspended') c.resume(); } catch (e) {} }
+// Enkla syntljud för rätt/fel, kräver inga filer
+function beep(type) {
+  if (save.sfxOff) return;
+  try {
+    const c = ctx(), now = c.currentTime;
+    const notes = type === 'ok' ? [784, 1047] : type === 'win' ? [523, 659, 784, 1047] : [220, 175];
+    notes.forEach((f, i) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = type === 'bad' ? 'triangle' : 'sine';
+      o.frequency.value = f;
+      const t0 = now + i * 0.11;
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(0.18, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28);
+      o.connect(g); g.connect(c.destination);
+      o.start(t0); o.stop(t0 + 0.3);
+    });
+  } catch (e) {}
+}
+
+/* ---------- Julmusik: medley av fria (public domain) melodier ----------
+   Noter skrivs "ton:slag". R = paus. Ackord ger bas (grundton/kvint). */
+const MEDLEY = [
+  { name: 'Bjällerklang (Jingle Bells, 1857)', bpm: 162, meter: 4, swing: 0.70, bells: 1,
+    mel: 'E5:1 E5:1 E5:2 E5:1 E5:1 E5:2 E5:1 G5:1 C5:1.5 D5:0.5 E5:4 ' +
+         'F5:1 F5:1 F5:1.5 F5:0.5 F5:1 E5:1 E5:1 E5:0.5 E5:0.5 E5:1 D5:1 D5:1 E5:1 D5:2 G5:2 ' +
+         'E5:1 E5:1 E5:2 E5:1 E5:1 E5:2 E5:1 G5:1 C5:1.5 D5:0.5 E5:4 ' +
+         'F5:1 F5:1 F5:1 F5:1 F5:1 E5:1 E5:1 E5:0.5 E5:0.5 G5:1 G5:1 F5:1 D5:1 C5:4',
+    ch: 'C:4 C:4 C:4 C:4 F:4 C:4 D:4 G:4 C:4 C:4 C:4 C:4 F:4 C:4 G:4 C:4' },
+  { name: 'Nu är det jul igen (trad.)', bpm: 138, meter: 3, swing: 0.68, bells: 1,
+    mel: 'C5:0.5 C5:0.25 C5:0.25 C5:0.5 G4:0.5 E4:0.5 G4:0.5 C5:0.5 C5:0.25 C5:0.25 C5:0.5 G4:0.5 E4:0.5 G4:0.5 C5:0.75 B4:0.25 C5:0.75 D5:0.25 E5:0.75 F5:0.25 G5:1 G5:2 C5:0.5 C5:0.25 C5:0.25 C5:0.5 G4:0.5 E4:0.5 G4:0.5 C5:0.5 C5:0.25 C5:0.25 C5:0.5 G4:0.5 E4:0.5 G4:0.5 C5:0.75 B4:0.25 C5:0.75 D5:0.25 E5:0.75 F5:0.25 G5:1 G5:2 F5:0.5 F5:0.25 F5:0.25 A5:0.5 F5:0.5 F5:0.5 F5:0.5 E5:0.5 E5:0.25 E5:0.25 G5:0.5 E5:0.5 E5:0.5 E5:0.5 D5:0.75 D5:0.25 F5:0.5 B4:0.5 B4:0.5 B4:0.5 D5:1 C5:2 F5:0.5 F5:0.25 F5:0.25 A5:0.5 F5:0.5 F5:0.5 F5:0.5 E5:0.5 E5:0.25 E5:0.25 G5:0.5 E5:0.5 E5:0.5 E5:0.5 D5:0.75 D5:0.25 F5:0.5 B4:0.5 B4:0.5 B4:0.5 D5:1 C5:2',
+    ch: 'C:3 C:3 G:3 C:3 C:3 C:3 G:3 C:3 F:3 C:3 G:3 C:3 F:3 C:3 G:3 C:3' },
+  { name: 'We Wish You a Merry Christmas (trad.)', bpm: 152, meter: 3, pickup: 1, swing: 0.68, bells: 0,
+    mel: 'G4:1 C5:1 C5:0.5 D5:0.5 C5:0.5 B4:0.5 A4:1 A4:1 A4:1 D5:1 D5:0.5 E5:0.5 D5:0.5 C5:0.5 ' +
+         'B4:1 G4:1 G4:1 E5:1 E5:0.5 F5:0.5 E5:0.5 D5:0.5 C5:1 A4:1 G4:0.5 G4:0.5 A4:1 D5:1 B4:1 C5:3',
+    ch: 'R:1 C:3 F:3 D:3 G:3 E:3 F:3 G:3 C:3' },
+  { name: 'Hej tomtegubbar, variation 2 (trad.)', bpm: 128, meter: 3, pickup: 0.5, swing: 0.56, bells: 1,
+    mel: 'A4:0.5 D5:0.5 D5:0.5 A4:0.25 B4:0.25 A4:0.25 G4:0.25 F#4:0.25 E4:0.25 F#4:0.25 G4:0.25 A4:0.5 A4:0.5 C#5:0.5 B4:0.25 C#5:0.25 D5:0.75 D5:0.25 C#5:0.25 B4:0.25 C#5:0.25 D5:0.25 E5:0.5 F#5:0.25 E5:0.25 D5:0.5 F#5:0.25 D5:0.25 C#5:0.5 E5:0.25 C#5:0.25 B4:0.5 A4:0.25 G#4:0.25 A4:0.5 A4:0.5 D5:0.5 D5:0.5 A4:0.25 B4:0.25 A4:0.25 G4:0.25 F#4:0.25 E4:0.25 F#4:0.25 G4:0.25 A4:0.5 A4:0.5 C#5:0.5 B4:0.25 C#5:0.25 D5:0.75 D5:0.25 C#5:0.25 B4:0.25 C#5:0.25 D5:0.25 E5:0.5 F#5:0.25 E5:0.25 D5:0.5 F#5:0.25 D5:0.25 A4:0.25 C#5:0.25 E5:0.25 C#5:0.25 D5:1.5 A4:0.5 A4:0.25 D5:0.25 F#5:0.25 D5:0.25 E5:0.5 E5:0.25 C#5:0.25 A4:0.25 C#5:0.25 E5:0.25 C#5:0.25 D5:0.5 F#5:0.25 D5:0.25 E5:0.5 E5:0.25 C#5:0.25 A4:0.25 C#5:0.25 E5:0.25 C#5:0.25 D5:0.5 F#5:0.25 D5:0.25 E5:0.5 E5:0.5 E5:0.75 C#5:0.25 B4:0.5 A4:0.25 G#4:0.25 A4:1.5 A4:0.5 D5:0.5 D5:0.5 A4:0.25 B4:0.25 A4:0.25 G4:0.25 F#4:0.25 E4:0.25 F#4:0.25 G4:0.25 A4:0.5 A4:0.5 C#5:0.5 B4:0.25 C#5:0.25 D5:0.75 D5:0.25 C#5:0.25 B4:0.25 C#5:0.25 D5:0.25 E5:0.5 F#5:0.25 E5:0.25 D5:0.5 F#5:0.25 D5:0.25 A4:0.25 C#5:0.25 E5:0.25 C#5:0.25 D5:2',
+    ch: 'R:0.5 D:3 A:2 D:1 A:1 D:2 A:1 E:1 A:1 D:3 A:2 D:1 A:1 D:2 A:1 D:2 D:1 A:2 D:1 A:2 D:1 A:2 E:1 A:2 D:3 A:2 D:1 A:1 D:2 A:1 D:2' },
+  { name: 'Deck the Halls (walesisk trad.)', bpm: 144, meter: 4, swing: 0.71, bells: 1,
+    mel: 'G5:1.5 F5:0.5 E5:1 D5:1 C5:1 D5:1 E5:1 C5:1 D5:0.5 E5:0.5 F5:0.5 D5:0.5 E5:1.5 D5:0.5 C5:1 B4:1 C5:2 ' +
+         'G5:1.5 F5:0.5 E5:1 D5:1 C5:1 D5:1 E5:1 C5:1 D5:0.5 E5:0.5 F5:0.5 D5:0.5 E5:1.5 D5:0.5 C5:1 B4:1 C5:2',
+    ch: 'C:4 C:4 G:4 C:4 C:4 C:4 G:4 C:4' },
+  { name: 'Joy to the World (Händel/Mason, 1839)', bpm: 116, meter: 4, swing: 0.70, bells: 0,
+    mel: 'C5:1 B4:0.75 A4:0.25 G4:1.5 F4:0.5 E4:1 D4:1 C4:2 G4:0.5 A4:1.5 A4:0.5 B4:1.5 B4:0.5 C5:3.5',
+    ch: 'C:4 G:2 C:2 C:0.5 F:2 G:2 C:3.5' }
+];
+// Ackord: grundton i basläge (alla durackord)
+const CHORDS = { A: 'A2', C: 'C3', D: 'D3', E: 'E2', F: 'F2', G: 'G2' };
+function noteMidi(n) {
+  const m = /^([A-G])(#|b)?(\d)$/.exec(n);
+  return 12 * (+m[3] + 1) + { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0);
+}
+const midiFreq = m => 440 * Math.pow(2, (m - 69) / 12);
+function noteFreq(n) {
+  const m = /^([A-G])(#|b)?(\d)$/.exec(n);
+  const semi = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[m[1]] + (m[2] === '#' ? 1 : m[2] === 'b' ? -1 : 0);
+  return 440 * Math.pow(2, (12 * (+m[3] + 1) + semi - 69) / 12);
+}
+const parseSeq = s => s.trim().split(/\s+/).map(x => { const [n, d] = x.split(':'); return [n, +d]; });
+
+const Music = {
+  on: false, timer: null, ev: null, total: 0, idx: 0, start0: 0, out: null, noise: null,
+  build() {
+    const ev = []; let T = 0;
+    const push = (k, t, o = {}) => ev.push(Object.assign({ k, t }, o));
+    for (const s of MEDLEY) {
+      const spb = 60 / s.bpm, M = s.meter || 4, pu = s.pickup || 0, sw = s.swing || 0.5;
+      // Swing: andra åttondelen i varje slag skjuts senare
+      const map = x => { const B = Math.floor(x), f = x - B; return B + (f < 0.5 ? f * sw / 0.5 : sw + (f - 0.5) * (1 - sw) / 0.5); };
+      const tm = b => T + (pu + map(b - pu)) * spb;
+      const bb = b => (((b - pu) % M) + M) % M;           // slag i takten
+      // Ackordtidslinje (för andrastämman)
+      const chordAt = []; let cpos = 0;
+      for (const [c, d] of parseSeq(s.ch)) { chordAt.push({ a: cpos, b: cpos + d, c }); cpos += d; }
+      const chordOf = b => { const x = chordAt.find(z => b >= z.a - 1e-6 && b < z.b - 1e-6); return x && x.c !== 'R' ? x.c : null; };
+      let len = 0;
+      for (const [n, d] of parseSeq(s.mel)) {
+        if (n !== 'R') {
+          const dur = (tm(len + d) - tm(len)) * 0.88;
+          push('m', tm(len), { f: noteFreq(n), d: dur });
+          // Andrastämma: närmaste ackordton minst en liten ters under melodin (ej på snabba sextondelar)
+          const c = chordOf(len);
+          if (c && d >= 0.5) {
+            const mm = noteMidi(n), rp = noteMidi(CHORDS[c]) % 12, pcs = [rp, (rp + 4) % 12, (rp + 7) % 12];
+            for (let h = mm - 3; h >= mm - 9; h--) if (pcs.includes(((h % 12) + 12) % 12)) {
+              push('h2', tm(len), { f: midiFreq(h), d: dur }); break;
+            }
+          }
+        }
+        len += d;
+      }
+      // Bas + ackordstötar
+      let cb = 0;
+      for (const [c, d] of parseSeq(s.ch)) {
+        if (c !== 'R') {
+          const root = noteFreq(CHORDS[c]);
+          const tri = [1, Math.pow(2, 4 / 12), Math.pow(2, 7 / 12)].map(r => root * 4 * r);
+          for (let i = 0; i < d; i++) {
+            const b = cb + i, k = Math.floor(bb(b) + 1e-6) % M;
+            if (M === 4) {
+              const step = [1, 1.5, 2, 1.5][k];                 // grund, kvint, oktav, kvint
+              push('b', tm(b), { f: root * step, d: spb * 0.55 });
+              if (k === 3) push('b', tm(b + 0.5), { f: root * Math.pow(2, 9 / 12), d: spb * 0.3, v: 0.7 }); // sext som upptakt
+              push('s', tm(b + 0.5), { fs: tri, d: spb * 0.22 });  // stöt på baktakten
+            } else {
+              if (k === 0) push('b', tm(b), { f: root, d: spb * 0.8 });
+              else push('s', tm(b), { fs: tri, d: spb * 0.3 });   // um-pa-pa
+            }
+          }
+        }
+        cb += d;
+      }
+      // Trummor
+      const fillFrom = len - 2;
+      for (let q = Math.ceil(pu * 2) / 2; q < len - 0.01; q += 0.5) {
+        const k = bb(q);
+        if (q >= fillFrom) {                                  // virvelfill före nästa låt
+          push('sn', tm(q), { v: 0.5 + 0.5 * (q - fillFrom) / 2 });
+          if (k === 0) push('k', tm(q));
+          continue;
+        }
+        if (M === 4) {
+          if (k === 0 || k === 2 || k === 2.5) push('k', tm(q), { v: k === 2.5 ? 0.6 : 1 });
+          if (k === 1 || k === 3) push('sn', tm(q));
+        } else {
+          if (k === 0) push('k', tm(q));
+          if (k === 1 || k === 2) push('sn', tm(q), { v: 0.45 });
+        }
+        push('h', tm(q), { v: q % 1 ? 0.6 : 1 });
+        if (s.bells && q % 1 === 0) push('n', tm(q), { v: 0.8 });
+      }
+      T = tm(len) + spb;                                       // ett slags paus
+    }
+    this.ev = ev.sort((a, b) => a.t - b.t);
+    this.total = T;
+  },
+  sync() { save.musicOff ? this.stop() : this.start(); },
+  start() {
+    if (this.on) return;
+    try {
+      const c = ctx();
+      if (!this.ev) this.build();
+      if (!this.noise) {
+        this.noise = c.createBuffer(1, c.sampleRate * 0.5, c.sampleRate);
+        const d = this.noise.getChannelData(0);
+        for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      }
+      this.out = c.createGain();
+      this.out.gain.setValueAtTime(0.0001, c.currentTime);
+      this.out.gain.exponentialRampToValueAtTime(0.5, c.currentTime + 1.2);
+      this.out.connect(c.destination);
+      this.start0 = c.currentTime + 0.3; this.idx = 0; this.on = true;
+      this.timer = setInterval(() => this.tick(), 60);
+      this.tick();
+    } catch (e) {}
+  },
+  stop() {
+    if (!this.on) return;
+    this.on = false; clearInterval(this.timer);
+    const g = this.out, c = ctx();
+    g.gain.setTargetAtTime(0.0001, c.currentTime, 0.15);
+    setTimeout(() => { try { g.disconnect(); } catch (e) {} }, 1000);
+  },
+  tick() {
+    const c = ctx(), now = c.currentTime, until = now + 0.4;
+    if (now - this.start0 > this.total) {   // hoppa fram om vi legat efter
+      this.start0 += Math.floor((now - this.start0) / this.total) * this.total; this.idx = 0;
+    }
+    for (;;) {
+      if (this.idx >= this.ev.length) { this.idx = 0; this.start0 += this.total; }
+      const e = this.ev[this.idx], t = this.start0 + e.t;
+      if (t > until) break;
+      if (t > now - 0.02) this.play(e, t);
+      this.idx++;
+    }
+  },
+  play(e, t) {
+    const c = ctx(), out = this.out, v = e.v === undefined ? 1 : e.v;
+    const env = (g, peak, a, rel) => {
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + a);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + rel);
+    };
+    const noise = (type, freq, q) => {
+      const s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+      s.buffer = this.noise; f.type = type; f.frequency.value = freq; if (q) f.Q.value = q;
+      s.connect(f); f.connect(g); g.connect(out); return [s, g];
+    };
+    if (e.k === 'h2') {                      // andrastämma: varm, lätt detunad sågtand
+      const f = c.createBiquadFilter(), g = c.createGain();
+      f.type = 'lowpass'; f.frequency.value = 1500; f.Q.value = 0.5;
+      f.connect(g); g.connect(out);
+      for (const det of [-7, 7]) {
+        const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = e.f; o.detune.value = det;
+        o.connect(f); o.start(t); o.stop(t + e.d + 0.2);
+      }
+      const hold = Math.max(0.12, e.d);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.052, t + 0.03);
+      g.gain.setValueAtTime(0.052, t + hold);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + hold + 0.15);
+      return;
+    }
+    if (e.k === 'm') {                       // melodi: klocklik triangel + oktav
+      const o = c.createOscillator(), o2 = c.createOscillator(), g = c.createGain(), g2 = c.createGain();
+      o.type = 'triangle'; o.frequency.value = e.f;
+      o2.type = 'sine'; o2.frequency.value = e.f * 2; g2.gain.value = 0.3;
+      o.connect(g); o2.connect(g2); g2.connect(g); g.connect(out);
+      const hold = Math.max(0.09, e.d), dec = Math.min(0.25, hold * 0.8);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.16, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.07, t + dec);
+      g.gain.setValueAtTime(0.07, t + hold);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + hold + 0.12);
+      o.start(t); o2.start(t); o.stop(t + hold + 0.2); o2.stop(t + hold + 0.2);
+    } else if (e.k === 'b') {                // bas: rund triangel med lite "plock"
+      const o = c.createOscillator(), f = c.createBiquadFilter(), g = c.createGain();
+      o.type = 'triangle'; o.frequency.value = e.f;
+      f.type = 'lowpass'; f.frequency.setValueAtTime(900, t); f.frequency.exponentialRampToValueAtTime(250, t + e.d);
+      o.connect(f); f.connect(g); g.connect(out);
+      env(g, 0.22 * v, 0.008, e.d);
+      o.start(t); o.stop(t + e.d + 0.05);
+    } else if (e.k === 's') {                // ackordstöt
+      const f = c.createBiquadFilter(), g = c.createGain();
+      f.type = 'lowpass'; f.frequency.value = 2200;
+      f.connect(g); g.connect(out);
+      for (const fr of e.fs) {
+        const o = c.createOscillator(); o.type = 'square'; o.frequency.value = fr;
+        o.connect(f); o.start(t); o.stop(t + e.d + 0.05);
+      }
+      env(g, 0.05, 0.005, e.d);
+    } else if (e.k === 'k') {                // bastrumma
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(140, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+      o.connect(g); g.connect(out);
+      env(g, 0.3 * v, 0.004, 0.2);
+      o.start(t); o.stop(t + 0.25);
+    } else if (e.k === 'sn') {               // virvel
+      const [s, g] = noise('bandpass', 1900, 0.8);
+      env(g, 0.22 * v, 0.003, 0.14);
+      s.start(t); s.stop(t + 0.16);
+      const o = c.createOscillator(), og = c.createGain();
+      o.type = 'triangle'; o.frequency.value = 190; o.connect(og); og.connect(out);
+      env(og, 0.07 * v, 0.003, 0.07);
+      o.start(t); o.stop(t + 0.08);
+    } else if (e.k === 'h') {                // hihat
+      const [s, g] = noise('highpass', 8500);
+      env(g, 0.035 * v, 0.002, 0.04);
+      s.start(t); s.stop(t + 0.05);
+    } else {                                 // bjällror
+      const [s, g] = noise('highpass', 6500);
+      env(g, 0.05 * v, 0.005, 0.16);
+      s.start(t); s.stop(t + 0.18);
+    }
+  }
+};
+// Pausa ljudet när appen ligger i bakgrunden
+document.addEventListener('visibilitychange', () => {
+  if (!actx) return;
+  try { document.hidden ? actx.suspend() : actx.resume(); } catch (e) {}
+});
+
+/* ---------- Hjälpfunktioner för grafik ---------- */
+function txt(scene, x, y, s, size, color = '#ffffff', extra = {}) {
+  return scene.add.text(x, y, s, Object.assign({
+    fontFamily: FONT, fontSize: size + 'px', color, fontStyle: '700', align: 'center',
+    padding: { x: 6, y: 8 }
+  }, extra)).setOrigin(0.5);
+}
+function button(scene, x, y, w, h, label, fill, cb, size = 56) {
+  const c = scene.add.container(x, y);
+  const g = scene.add.graphics();
+  g.fillStyle(0x000000, 0.25).fillRoundedRect(-w / 2 + 4, -h / 2 + 8, w, h, 26);
+  g.fillStyle(fill, 1).fillRoundedRect(-w / 2, -h / 2, w, h, 26);
+  g.lineStyle(5, 0xffffff, 0.9).strokeRoundedRect(-w / 2, -h / 2, w, h, 26);
+  const t = txt(scene, 0, 0, label, size);
+  c.add([g, t]);
+  c.setSize(w, h).setInteractive({ useHandCursor: true });
+  c.on('pointerdown', () => {
+    unlockAudio();
+    scene.tweens.add({ targets: c, scaleX: 0.92, scaleY: 0.92, duration: 70, yoyo: true });
+    cb && cb(c);
+  });
+  c.label = t;
+  return c;
+}
+function bg(scene) {
+  const g = scene.add.graphics().setDepth(-2);
+  g.fillGradientStyle(0x0b1d3a, 0x0b1d3a, 0x1d4e89, 0x1d4e89, 1);
+  g.fillRect(0, 0, W, H);
+}
+function addSnow(scene) {
+  const p = scene.add.particles(0, 0, 'flake', {
+    x: { min: 0, max: W }, y: -20, lifespan: 26000,
+    speedY: { min: 50, max: 120 }, speedX: { min: -25, max: 25 },
+    scale: { min: 0.25, max: 0.9 }, alpha: { min: 0.4, max: 0.9 },
+    frequency: 140, quantity: 1
+  }).setDepth(-1);
+  try { p.fastForward(14000); } catch (e) {}
+  return p;
+}
+
+/* =========================================================
+   Scener
+   ========================================================= */
+class Boot extends Phaser.Scene {
+  constructor() { super('Boot'); }
+  create() {
+    const g = this.make.graphics({ add: false });
+    g.fillStyle(0xffffff, 1).fillCircle(8, 8, 8); g.generateTexture('flake', 16, 16); g.clear();
+    g.fillStyle(0xffffff, 1).fillCircle(26, 26, 24);
+    g.fillStyle(0xd3e4f5, 1).fillCircle(32, 32, 12);
+    g.fillStyle(0xffffff, 1).fillCircle(22, 20, 12);
+    g.generateTexture('ball', 52, 52); g.clear();
+    // Stora, tydliga paket (120×120, skalas ner vid behov)
+    const gift = (key, body, shade, lid, rib, ribDark, line) => {
+      g.clear();
+      g.fillStyle(0x000000, 0.25).fillRoundedRect(15, 44, 100, 74, 10);
+      g.fillStyle(body, 1).fillRoundedRect(10, 40, 100, 74, 10);
+      g.fillStyle(shade, 1).fillRect(10, 92, 100, 12);
+      g.fillStyle(shade, 1).fillRoundedRect(10, 96, 100, 18, 10);
+      g.fillStyle(rib, 1).fillRect(52, 40, 16, 74);
+      g.fillStyle(lid, 1).fillRoundedRect(4, 26, 112, 24, 8);
+      g.fillStyle(rib, 1).fillRect(52, 26, 16, 24);
+      g.fillStyle(rib, 1).fillEllipse(42, 16, 36, 24).fillEllipse(78, 16, 36, 24);
+      g.fillStyle(ribDark, 1).fillEllipse(42, 16, 14, 10).fillEllipse(78, 16, 14, 10);
+      g.fillStyle(ribDark, 1).fillCircle(60, 20, 10);
+      g.lineStyle(4, line, 1);
+      g.strokeRoundedRect(10, 40, 100, 74, 10);
+      g.strokeRoundedRect(4, 26, 112, 24, 8);
+      g.generateTexture(key, 120, 120);
+    };
+    gift('giftR', 0xe0283c, 0xb81c2e, 0xf2475a, 0xffd23f, 0xd9a400, 0x5c0a14);
+    gift('giftG', 0x24a148, 0x1a7d37, 0x3cc464, 0xffffff, 0xc9d6e3, 0x0b3d1b);
+    g.clear();
+    g.lineStyle(6, 0xffffff, 0.75).strokeRoundedRect(10, 26, 100, 88, 14);
+    g.generateTexture('ghost', 120, 120); g.clear();
+    g.fillStyle(0x9a5320, 1).fillCircle(24, 24, 22);
+    g.fillStyle(0xb8692b, 1).fillCircle(24, 24, 18);
+    g.fillStyle(0xffffff, 1);
+    [[16, 16], [31, 15], [24, 26], [15, 32], [33, 32]].forEach(([x, y]) => g.fillCircle(x, y, 3));
+    g.generateTexture('cookie', 48, 48);
+    g.destroy();
+    this.scene.start('Start');
+  }
+}
+
+class Start extends Phaser.Scene {
+  constructor() { super('Start'); }
+  create() {
+    bg(this); addSnow(this);
+    txt(this, W / 2, 180, 'Tomtens', 84, '#ffffff', { stroke: '#c8102e', strokeThickness: 10 });
+    txt(this, W / 2, 280, 'Räkneverkstad', 76, '#f4c542', { stroke: '#0b1d3a', strokeThickness: 10 });
+    const tree = txt(this, W / 2, 590, '🎄', 300);
+    this.tweens.add({ targets: tree, angle: { from: -3, to: 3 }, duration: 1600, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+    button(this, W / 2, 1010, 260, 180, '▶', 0xc8102e, () => {
+      unlockAudio(); beep('ok'); Music.sync();
+      this.cameras.main.fadeOut(250);
+      this.time.delayedCall(260, () => this.scene.start('Calendar'));
+    }, 72);
+  }
+}
+
+class Calendar extends Phaser.Scene {
+  constructor() { super('Calendar'); }
+  init(data) { this.newOrn = !!(data && data.newOrn); }
+  create() {
+    this.cameras.main.fadeIn(250);
+    bg(this); addSnow(this);
+    this.drawTree();
+
+    menuButton(this, 655, 55);
+
+    for (let d = 1; d <= 24; d++) this.makeDoor(d);
+  }
+  drawTree() {
+    const g = this.add.graphics();
+    g.fillStyle(0x1f7a3a, 1);
+    g.fillTriangle(360, 120, 270, 250, 450, 250);
+    g.fillTriangle(360, 180, 230, 330, 490, 330);
+    g.fillTriangle(360, 250, 190, 420, 530, 420);
+    g.fillStyle(0x6b3e1f, 1).fillRect(340, 420, 40, 36);
+    txt(this, 360, 112, '⭐', 54);
+    const hw = y => Math.max(
+      y >= 120 && y <= 250 ? (y - 120) / 130 * 90 : 0,
+      y >= 180 && y <= 330 ? (y - 180) / 150 * 130 : 0,
+      y >= 250 && y <= 420 ? (y - 250) / 170 * 170 : 0);
+    const rows = [205, 245, 290, 322, 368, 402];
+    const cols = [0xe63946, 0xf4c542, 0x4cc9f0, 0xffffff, 0xff7bd5];
+    const n = doneCount();
+    for (let i = 0; i < 24; i++) {
+      const row = Math.floor(i / 4), col = i % 4, y = rows[row], w = hw(y);
+      const x = 360 + (col - 1.5) / 1.5 * w * 0.72 + (row % 2 ? w * 0.08 : -w * 0.08);
+      if (i < n) {
+        const o = this.add.circle(x, y, 11, cols[i % 5]).setStrokeStyle(2, 0x000000, 0.25);
+        if (this.newOrn && i === n - 1) {
+          o.setScale(0);
+          this.tweens.add({ targets: o, scale: 1, duration: 600, delay: 400, ease: 'Back.out' });
+          const sp = txt(this, x, y, '✨', 50).setScale(0);
+          this.tweens.add({ targets: sp, scale: 1.3, alpha: 0, duration: 900, delay: 700, onComplete: () => sp.destroy() });
+        }
+      }
+    }
+  }
+  makeDoor(d) {
+    const i = d - 1, col = i % 4, row = Math.floor(i / 4);
+    const x = 105 + col * 170, y = 590 + row * 125;
+    const done = save.done[d] || 0, unlocked = isUnlocked(d), game = GAMES[i % 3];
+    const c = this.add.container(x, y);
+    const g = this.add.graphics();
+    if (done) {
+      g.fillStyle(0x0e2a52, 1).fillRoundedRect(-75, -55, 150, 110, 18);
+      g.lineStyle(4, 0xf4c542, 1).strokeRoundedRect(-75, -55, 150, 110, 18);
+      c.add([g, txt(this, -30, -22, String(d), 40, '#f4c542'), txt(this, 40, -22, GAME_ICON[game], 30),
+        txt(this, 0, 28, '★'.repeat(done) + '☆'.repeat(3 - done), 32, '#f4c542')]);
+    } else {
+      const base = (col + row) % 2 ? 0xc8102e : 0x1f7a3a;
+      g.fillStyle(base, 1).fillRoundedRect(-75, -55, 150, 110, 18);
+      g.lineStyle(4, unlocked ? 0xf4c542 : 0xffffff, unlocked ? 1 : 0.4).strokeRoundedRect(-75, -55, 150, 110, 18);
+      c.add([g, txt(this, 0, -4, String(d), 58)]);
+      if (unlocked) c.add(txt(this, 50, 32, GAME_ICON[game], 24));
+      else { c.add(txt(this, 52, -32, '🔒', 24)); c.setAlpha(0.45); }
+    }
+    if (unlocked) {
+      c.setSize(150, 110).setInteractive({ useHandCursor: true });
+      c.on('pointerdown', () => {
+        unlockAudio(); beep('ok');
+        this.scene.start(game, { day: d });
+      });
+      if (!done) this.tweens.add({ targets: c, scale: 1.07, duration: 650, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+    }
+  }
+}
+
+/* ---------- Meny: ljud + framsteg (för vuxna) ---------- */
+function menuButton(scene, x, y) {
+  return button(scene, x, y, 90, 90, '☰', 0x0e2a52, () => {
+    scene.scene.pause();
+    scene.scene.launch('Menu', { from: scene.scene.key });
+  }, 46);
+}
+function statsSummary() {
+  let r = 0, w = 0, rp = 0, wp = 0, rm = 0, wm = 0;
+  for (const [k, v] of Object.entries(save.stats)) {
+    r += v.r; w += v.w;
+    if (k.includes('+')) { rp += v.r; wp += v.w; } else { rm += v.r; wm += v.w; }
+  }
+  const pct = (a, b) => a + b ? Math.round(100 * a / (a + b)) + ' %' : '–';
+  const stars = Object.values(save.done).reduce((a, b) => a + b, 0);
+  return { n: r + w, all: pct(r, w), plus: pct(rp, wp), minus: pct(rm, wm), stars };
+}
+function accColor(v) {
+  const n = v.r + v.w; if (!n) return 0x2a3f63;
+  const a = v.r / n;
+  if (a >= 0.85) return 0x2fae5b;
+  if (a >= 0.6) return 0xe8c13a;
+  return 0xd8434f;
+}
+
+class Menu extends Phaser.Scene {
+  constructor() { super('Menu'); }
+  init(data) { this.from = data.from; this.op = '+'; }
+  create() {
+    this.add.rectangle(360, 640, 720, 1280, 0x000000, 0.65).setInteractive();
+    const p = this.add.graphics();
+    p.fillStyle(0x0e2a52, 1).fillRoundedRect(30, 40, 660, 1210, 36);
+    p.lineStyle(5, 0xf4c542, 1).strokeRoundedRect(30, 40, 660, 1210, 36);
+    txt(this, 360, 100, 'Meny', 48, '#f4c542');
+    button(this, 625, 100, 80, 80, '✕', 0xc8102e, () => this.close(), 40);
+
+    // Ljud
+    const toggle = (x, icon, label, key) => {
+      const b = button(this, x, 210, 280, 100, '', 0x1f7a3a, () => {
+        save[key] = !save[key]; persist();
+        if (key === 'musicOff') Music.sync(); else beep('ok');
+        paint();
+      }, 34);
+      const paint = () => {
+        const on = !save[key];
+        b.label.setText(`${icon} ${label}: ${on ? 'på' : 'av'}`);
+        b.setAlpha(on ? 1 : 0.5);
+      };
+      paint();
+    };
+    toggle(205, '🎵', 'Musik', 'musicOff');
+    toggle(515, '🔔', 'Effekter', 'sfxOff');
+
+    // Framsteg
+    txt(this, 360, 320, 'Framsteg', 40, '#ffffff');
+    const st = statsSummary();
+    [[150, `${doneCount()}/24`, 'luckor'], [360, `${st.stars}/72`, 'stjärnor'], [570, st.all, `rätt direkt (${st.n} st)`]]
+      .forEach(([x, big, small]) => {
+        this.add.graphics().fillStyle(0x16386b, 1).fillRoundedRect(x - 98, 355, 196, 110, 18);
+        txt(this, x, 395, big, 40, '#f4c542');
+        txt(this, x, 442, small, 20, '#cfe3ff');
+      });
+
+    // Flikar plus/minus
+    this.tabs = {};
+    [['+', 255, st.plus], ['−', 465, st.minus]].forEach(([op, x, pct]) => {
+      this.tabs[op] = button(this, x, 525, 190, 80, `${op}  ${pct}`, 0x16386b, () => { this.op = op; this.drawGrid(); }, 36);
+    });
+    this.grid = this.add.container(0, 0);
+    this.info = txt(this, 360, 1160, '', 25, '#ffffff');
+    this.drawGrid();
+
+    // Nollställ (tryck två gånger)
+    let armed = false;
+    const reset = button(this, 360, 1210, 300, 60, 'Nollställ allt', 0x5a2230, () => {
+      if (!armed) {
+        armed = true; reset.label.setText('Säker? Tryck igen');
+        this.time.delayedCall(3000, () => { armed = false; if (reset.active) reset.label.setText('Nollställ allt'); });
+      } else {
+        save.done = {}; save.stats = {}; persist();
+        this.close(true);
+      }
+    }, 26);
+  }
+  drawGrid() {
+    const op = this.op, C = 46, x0 = 360 - 5.5 * C, y0 = 598;
+    this.grid.removeAll(true);
+    for (const k in this.tabs) this.tabs[k].setAlpha(k === op ? 1 : 0.55);
+    const add = o => { this.grid.add(o); return o; };
+    add(txt(this, x0, y0, op, 30, '#f4c542'));
+    for (let i = 0; i <= 10; i++) {
+      add(txt(this, x0 + (i + 1) * C, y0, String(i), 24, '#cfe3ff'));   // b (överst)
+      add(txt(this, x0, y0 + (i + 1) * C, String(i), 24, '#cfe3ff'));   // a (vänster)
+    }
+    const sym = op === '+' ? '+' : '-';
+    for (let a = 0; a <= 10; a++) for (let b = 0; b <= 10; b++) {
+      if (op === '+' ? a + b > 10 : b > a) continue;
+      const v = save.stats[a + sym + b] || { r: 0, w: 0 };
+      const cell = add(this.add.rectangle(x0 + (b + 1) * C, y0 + (a + 1) * C, C - 5, C - 5, accColor(v)).setInteractive());
+      cell.on('pointerdown', () => {
+        const res = op === '+' ? a + b : a - b;
+        this.info.setText(v.r + v.w
+          ? `${a} ${op} ${b} = ${res}:  ${v.r} rätt, ${v.w} fel`
+          : `${a} ${op} ${b} = ${res}:  inte övad än`);
+      });
+    }
+    // Svårast just nu
+    const hard = Object.entries(save.stats)
+      .filter(([k, v]) => v.w > 0 && k.includes(sym))
+      .sort((x, y) => (y[1].w - y[1].r * 0.5) - (x[1].w - x[1].r * 0.5)).slice(0, 4)
+      .map(([k]) => k.replace('-', ' − ').replace('+', ' + '));
+    this.info.setText(hard.length ? 'Svårast: ' + hard.join(',  ') : '🟩 bra   🟨 ok   🟥 öva mer   ⬛ ej övad');
+  }
+  close(reset) {
+    if (reset) { this.scene.stop(this.from); this.scene.start('Calendar'); }
+    else { this.scene.resume(this.from); this.scene.stop(); }
+  }
+}
+
+/* ---------- Gemensam bas för minispelen ---------- */
+class BaseGame extends Phaser.Scene {
+  init(data) {
+    this.day = (data && data.day) || 1;
+    this.qIndex = 0; this.mistakes = 0; this.used = new Set(); this.busy = false;
+  }
+  create() {
+    this.cameras.main.fadeIn(250);
+    bg(this); addSnow(this);
+    this.buildHud();
+    this.buildWorld();
+    this.nextProblem(true);
+  }
+  buildHud() {
+    button(this, 65, 62, 90, 90, '◀', 0x0e2a52, () => { this.scene.start('Calendar'); }, 44);
+    menuButton(this, 655, 62);
+    this.dots = [];
+    for (let i = 0; i < N_Q; i++) {
+      this.dots.push(this.add.circle(360 + (i - (N_Q - 1) / 2) * 52, 52, 17, 0x0e2a52).setStrokeStyle(4, 0xffffff, 0.8));
+    }
+  }
+  fillDot(i) {
+    const d = this.dots[i]; if (!d) return;
+    d.setFillStyle(0xf4c542);
+    this.tweens.add({ targets: d, scale: 1.4, duration: 150, yoyo: true });
+  }
+  nextProblem(first = false) {
+    if (this.qIndex >= N_Q) return this.finish();
+    const p = makeProblem(this.day, this.used);
+    this.used.add(p.key);
+    this.p = p; this.firstTry = true; this.busy = false;
+    this.showProblem(p, makeChoices(p.answer));
+  }
+  answer(v, target) {
+    if (this.busy) return;
+    if (v === this.p.answer) {
+      this.busy = true;
+      if (this.firstTry) record(this.p.key, true);
+      beep('ok');
+      this.fillDot(this.qIndex);
+      this.onCorrect(target, () => { this.qIndex++; this.nextProblem(); });
+    } else {
+      if (this.firstTry) { record(this.p.key, false); this.mistakes++; this.firstTry = false; }
+      beep('bad');
+      this.onWrong(target);
+    }
+  }
+  shakeOut(obj) {
+    const x0 = obj.x;
+    this.tweens.add({ targets: obj, x: x0 + 14, duration: 50, yoyo: true, repeat: 3, onComplete: () => obj.x = x0 });
+    obj.setAlpha(0.35);
+    obj.disableInteractive();
+  }
+  finish() {
+    this.busy = true;
+    const stars = this.mistakes === 0 ? 3 : this.mistakes <= 2 ? 2 : 1;
+    const first = !save.done[this.day];
+    save.done[this.day] = Math.max(save.done[this.day] || 0, stars);
+    persist();
+    beep('win');
+
+    const ov = this.add.container(0, 0).setDepth(100);
+    const dim = this.add.rectangle(360, 640, 720, 1280, 0x000000, 0.6).setInteractive();
+    const panel = this.add.graphics();
+    panel.fillStyle(0x0e2a52, 1).fillRoundedRect(80, 330, 560, 660, 40);
+    panel.lineStyle(6, 0xf4c542, 1).strokeRoundedRect(80, 330, 560, 660, 40);
+    ov.add([dim, panel, txt(this, 360, 420, '🎉', 90)]);
+    [0, 1, 2].forEach(i => {
+      const s = txt(this, 240 + i * 120, 560, '★', 120, i < stars ? '#f4c542' : '#3a4f73').setScale(0);
+      ov.add(s);
+      this.tweens.add({ targets: s, scale: 1, duration: 350, delay: 250 + i * 250, ease: 'Back.out' });
+    });
+    if (first) { const o = txt(this, 360, 700, '🎄', 110).setScale(0); ov.add(o); this.tweens.add({ targets: o, scale: 1, delay: 1000, duration: 400, ease: 'Back.out' }); }
+    ov.add(button(this, 240, 870, 200, 140, '▶', 0x1f7a3a, () => {
+      this.scene.start('Calendar', { newOrn: first });
+    }, 70));
+    ov.add(button(this, 480, 870, 200, 140, '↻', 0xc8102e, () => {
+      this.scene.restart({ day: this.day });
+    }, 70));
+    const conf = this.add.particles(360, 380, 'flake', {
+      speed: { min: 250, max: 550 }, angle: { min: 200, max: 340 }, gravityY: 700,
+      lifespan: 2200, scale: { start: 1.1, end: 0.5 },
+      tint: [0xf4c542, 0xe63946, 0x4cc9f0, 0x45c167, 0xffffff], emitting: false
+    }).setDepth(101);
+    conf.explode(70);
+  }
+}
+
+/* ---------- Minispel 1: Paketlagret ---------- */
+class Paket extends BaseGame {
+  constructor() { super('Paket'); }
+  buildWorld() {
+    this.qText = txt(this, 360, 190, '', 96, '#ffffff', { stroke: '#0b1d3a', strokeThickness: 12 });
+    this.vis = this.add.container(0, 0);
+    this.add.graphics().fillStyle(0xeaf4ff, 1).fillEllipse(360, 900, 900, 130);
+    this.rudolf = txt(this, 170, 838, '🦌', 76);
+    this.sleigh = txt(this, 330, 846, '🛷', 90);
+    this.tweens.add({ targets: this.rudolf, y: 830, duration: 500, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+    this.loaded = 0;
+    this.btns = [];
+  }
+  showProblem(p, ch) {
+    this.qText.setText(problemString(p)).setColor('#ffffff');
+    this.drawVis(p);
+    this.btns.forEach(b => b.destroy());
+    this.btns = [];
+    ch.forEach((v, i) => {
+      const x = i % 2 ? 525 : 195, y = i < 2 ? 1015 : 1170;
+      const b = button(this, x, y, 290, 135, String(v), (i === 0 || i === 3) ? 0xc8102e : 0x1f7a3a, () => this.answer(v, b), 90);
+      b.setScale(0);
+      this.tweens.add({ targets: b, scale: 1, duration: 260, delay: i * 60, ease: 'Back.out' });
+      this.btns.push(b);
+    });
+  }
+  drawVis(p) {
+    this.vis.removeAll(true);
+    const add = o => { this.vis.add(o); return o; };
+    const MID = 515, AREA = 480;             // bildytan ca 275–755
+    const gift = (x, y, tex, S, crossed) => {
+      const im = add(this.add.image(x, y, tex).setDisplaySize(S * 0.94, S * 0.94));
+      if (crossed) {
+        im.setAlpha(0.3);
+        const k = S * 0.32;
+        add(this.add.graphics().lineStyle(9, 0xff3b3b, 1)
+          .lineBetween(x - k, y - k, x + k, y + k).lineBetween(x + k, y - k, x - k, y + k));
+      }
+    };
+    const sign = (x, y, s) => add(txt(this, x, y, s, 64, '#ffffff', { stroke: '#0b1d3a', strokeThickness: 8 }));
+
+    // Lätt plus (a+b ≤ 4): allt på en rad, röda + gröna
+    if (!p.missing && p.op === '+' && p.a + p.b <= 4) {
+      const S = 130, gap = 80, w = (p.a + p.b) * S + (p.a && p.b ? gap : 0);
+      let x = 360 - w / 2 + S / 2;
+      for (let i = 0; i < p.a; i++, x += S) gift(x, MID, 'giftR', S);
+      if (p.a && p.b) { sign(x - S / 2 + gap / 2, MID, '+'); x += gap; }
+      for (let i = 0; i < p.b; i++, x += S) gift(x, MID, 'giftG', S);
+    } else {
+      // Annars staplat: grupper i rader om 5 (som en tiorsram)
+      const parts = [];
+      if (p.missing) {
+        parts.push({ n: p.a, tex: 'giftR' }, { s: p.op === '+' ? '+ ?' : '− ?' }, { s: '=' }, { n: p.r, tex: 'ghost' });
+      } else if (p.op === '+') {
+        parts.push({ n: p.a, tex: 'giftR' }, { s: '+' }, { n: p.b, tex: 'giftG' });
+      } else {
+        parts.push({ n: p.a, tex: 'giftR', crossFrom: p.a - p.b });
+      }
+      const rows = parts.reduce((t, q) => t + (q.s ? 0 : Math.ceil(q.n / 5)), 0);
+      const signs = parts.filter(q => q.s).length;
+      const S = Math.min(130, 136, (AREA - signs * 62) / Math.max(1, rows));
+      const hOf = q => q.s ? 62 : Math.ceil(q.n / 5) * S;
+      const total = parts.reduce((t, q) => t + hOf(q), 0);
+      let y = MID - total / 2;
+      for (const q of parts) {
+        if (q.s) { sign(360, y + 31, q.s); y += 62; continue; }
+        for (let i = 0; i < q.n; i++) {
+          const r = Math.floor(i / 5), inRow = Math.min(5, q.n - r * 5), k = i % 5;
+          gift(360 + (k - (inRow - 1) / 2) * S, y + r * S + S / 2, q.tex, S,
+            q.crossFrom !== undefined && i >= q.crossFrom);
+        }
+        y += hOf(q);
+      }
+    }
+    this.vis.setAlpha(0);
+    this.tweens.add({ targets: this.vis, alpha: 1, duration: 300 });
+  }
+  onCorrect(btn, done) {
+    this.qText.setText(problemString(this.p, true)).setColor('#7CFC9A');
+    const gift = this.add.image(btn.x, btn.y, this.loaded % 2 ? 'giftG' : 'giftR').setScale(1).setDepth(5);
+    const tx = 305 + (this.loaded % 3) * 30, ty = 825 - Math.floor(this.loaded / 3) * 24;
+    this.tweens.add({
+      targets: gift, x: tx, y: ty, scale: 0.3, duration: 600, ease: 'Quad.inOut',
+      onComplete: () => { this.loaded++; this.tweens.add({ targets: this.sleigh, y: '+=8', duration: 90, yoyo: true }); }
+    });
+    this.time.delayedCall(1100, done);
+  }
+  onWrong(btn) { this.shakeOut(btn); }
+}
+
+/* ---------- Minispel 2: Pepparkaksbageriet ---------- */
+class Kakor extends BaseGame {
+  constructor() { super('Kakor'); }
+  buildWorld() {
+    const g = this.add.graphics();
+    g.fillStyle(0x7a4a26, 1).fillRect(0, 575, 720, 40);
+    g.fillStyle(0x5e3519, 1).fillRect(0, 615, 720, 14);
+    this.customer = txt(this, 140, 420, '🎅', 150);
+    const b = this.add.graphics();
+    b.fillStyle(0xffffff, 1).fillRoundedRect(250, 300, 440, 170, 34);
+    b.fillTriangle(255, 390, 205, 420, 260, 430);
+    this.qText = txt(this, 470, 385, '', 86, '#0b1d3a');
+    this.trays = [];
+  }
+  showProblem(p, ch) {
+    this.customer.setText(Phaser.Utils.Array.GetRandom(['🎅', '🤶', '🧝', '⛄', '🦌', '🐧', '🐻']));
+    this.customer.x = -120;
+    this.tweens.add({ targets: this.customer, x: 140, duration: 450, ease: 'Back.out' });
+    this.qText.setText(problemString(p)).setColor('#0b1d3a');
+    this.trays.forEach(t => t.destroy());
+    this.trays = [];
+    ch.forEach((v, i) => {
+      const x = i % 2 ? 530 : 190, y = i < 2 ? 805 : 1100;
+      const t = this.makeTray(v, x, y);
+      t.setScale(0);
+      this.tweens.add({ targets: t, scale: 1, duration: 260, delay: i * 70, ease: 'Back.out' });
+      this.trays.push(t);
+    });
+  }
+  makeTray(v, x, y) {
+    const c = this.add.container(x, y);
+    const g = this.add.graphics();
+    g.fillStyle(0x000000, 0.25).fillRoundedRect(-141, -112, 290, 240, 24);
+    g.fillStyle(0x8f99a3, 1).fillRoundedRect(-145, -120, 290, 240, 24);
+    g.fillStyle(0xc9d1d9, 1).fillRoundedRect(-130, -105, 260, 210, 16);
+    c.add(g);
+    c.cookies = [];
+    const perRow = 5, S = 50, rows = v > 5 ? 2 : 1;
+    for (let i = 0; i < v; i++) {
+      const r = Math.floor(i / perRow), k = i % perRow;
+      const inRow = r === 0 ? Math.min(v, perRow) : v - perRow;
+      const cx = (k - (inRow - 1) / 2) * S;
+      const cy = rows === 2 ? (r === 0 ? 0 : 55) : 28;
+      const im = this.add.image(cx, cy, 'cookie');
+      c.add(im); c.cookies.push(im);
+    }
+    const badge = this.add.circle(-100, -78, 36, 0xc8102e).setStrokeStyle(4, 0xffffff);
+    c.add([badge, txt(this, -100, -78, String(v), 46)]);
+    c.setSize(290, 240).setInteractive({ useHandCursor: true });
+    c.on('pointerdown', () => { unlockAudio(); this.answer(v, c); });
+    return c;
+  }
+  onCorrect(tray, done) {
+    this.qText.setText(problemString(this.p, true)).setColor('#1f7a3a');
+    tray.cookies.forEach((ck, i) => {
+      const wx = tray.x + ck.x, wy = tray.y + ck.y;
+      tray.remove(ck);
+      ck.setPosition(wx, wy).setDepth(5);
+      this.add.existing(ck);
+      this.tweens.add({ targets: ck, x: 140, y: 420, scale: 0.3, alpha: 0, duration: 500, delay: i * 50, ease: 'Quad.in' });
+    });
+    this.time.delayedCall(450 + tray.cookies.length * 50, () => {
+      this.tweens.add({ targets: this.customer, y: 390, duration: 120, yoyo: true, repeat: 1 });
+      const yum = txt(this, 230, 300, '😋', 70).setDepth(6);
+      this.tweens.add({ targets: yum, y: 240, alpha: 0, duration: 900, onComplete: () => yum.destroy() });
+    });
+    this.time.delayedCall(1300 + tray.cookies.length * 50, done);
+  }
+  onWrong(tray) { this.shakeOut(tray); }
+}
+
+/* ---------- Minispel 3: Snöbollskriget ---------- */
+class Snoboll extends BaseGame {
+  constructor() { super('Snoboll'); }
+  buildWorld() {
+    this.qText = txt(this, 360, 250, '', 100, '#ffffff', { stroke: '#0b1d3a', strokeThickness: 12 });
+    const g = this.add.graphics();
+    g.fillStyle(0xeaf4ff, 1).fillEllipse(360, 1260, 1000, 300);
+    this.thrower = txt(this, 360, 1150, '⛄', 150).setDepth(3);
+    this.nissar = [];
+    this.throwing = false;
+  }
+  showProblem(p, ch) {
+    this.qText.setText(problemString(p)).setColor('#ffffff');
+    this.nissar.forEach(n => { this.tweens.killTweensOf(n); n.destroy(); });
+    this.nissar = [];
+    const lanes = Phaser.Utils.Array.Shuffle([440, 600, 760, 920]);
+    ch.forEach((v, i) => this.nissar.push(this.makeNisse(v, lanes[i])));
+  }
+  makeNisse(v, y) {
+    const x = Phaser.Math.Between(150, 570);
+    const c = this.add.container(x, y);
+    const g = this.add.graphics();
+    g.fillStyle(0x6b3e1f, 1).fillRect(-4, -30, 8, 30);
+    g.fillStyle(0xfff8e7, 1).fillRoundedRect(-55, -98, 110, 72, 14);
+    g.lineStyle(5, 0x8b5a2b, 1).strokeRoundedRect(-55, -98, 110, 72, 14);
+    const num = txt(this, 0, -62, String(v), 54, '#0b1d3a');
+    c.face = txt(this, 0, 32, '🧝', 100);
+    c.add([g, num, c.face]);
+    c.val = v;
+    c.setSize(170, 190).setInteractive({ useHandCursor: true });
+    c.on('pointerdown', () => { unlockAudio(); this.throwAt(c); });
+    c.tw = this.tweens.add({
+      targets: c, x: x < 360 ? 590 : 130, duration: Phaser.Math.Between(5000, 8000),
+      yoyo: true, repeat: -1, ease: 'Sine.inOut'
+    });
+    c.setScale(0);
+    this.tweens.add({ targets: c, scale: 1, duration: 300, ease: 'Back.out' });
+    return c;
+  }
+  throwAt(c) {
+    if (this.busy || this.throwing || c.out) return;
+    this.throwing = true;
+    c.tw.pause();
+    this.tweens.add({ targets: this.thrower, angle: -12, duration: 100, yoyo: true });
+    const ball = this.add.image(360, 1080, 'ball').setDepth(10);
+    this.tweens.add({
+      targets: ball, x: c.x, y: c.y + 20, scale: 0.65, duration: 380, ease: 'Quad.out',
+      onComplete: () => {
+        this.throwing = false;
+        const splat = this.add.circle(ball.x, ball.y, 26, 0xffffff, 0.9).setDepth(9);
+        this.tweens.add({ targets: splat, scale: 2.2, alpha: 0, duration: 350, onComplete: () => splat.destroy() });
+        ball.destroy();
+        this.answer(c.val, c);
+      }
+    });
+  }
+  onCorrect(c, done) {
+    this.qText.setText(problemString(this.p, true)).setColor('#7CFC9A');
+    const hit = txt(this, c.x, c.y - 140, '💥', 80).setDepth(11);
+    this.tweens.add({ targets: hit, y: hit.y - 50, alpha: 0, duration: 900, delay: 300, onComplete: () => hit.destroy() });
+    this.tweens.add({ targets: c, angle: 360, y: c.y + 60, alpha: 0, scale: 0.5, duration: 800, ease: 'Quad.in' });
+    this.nissar.forEach(n => { if (n !== c) n.tw.pause(); });
+    this.time.delayedCall(1100, done);
+  }
+  onWrong(c) {
+    c.out = true;
+    c.face.setText('😜');
+    c.setAlpha(0.4);
+    c.disableInteractive();
+    this.time.delayedCall(700, () => { if (c.face && c.face.active) c.face.setText('🧝'); });
+    c.tw.resume();
+  }
+}
+
+/* ---------- Start ---------- */
+const config = {
+  type: Phaser.AUTO, parent: 'game', width: W, height: H, backgroundColor: '#0b1d3a',
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  scene: [Boot, Start, Calendar, Paket, Kakor, Snoboll, Menu]
+};
+let started = false;
+function go() { if (started) return; started = true; window.game = new Phaser.Game(config); }
+(document.fonts && document.fonts.load ? document.fonts.load('700 40px Fredoka') : Promise.resolve()).then(go, go);
+setTimeout(go, 2500);
+</script>
+</body>
+</html>
